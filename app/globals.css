@@ -1,26 +1,129 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/*
+ * Design tokens from the Paper file "IN Gorina" (same values as in-app/src/theme).
+ * Light theme only. Use the generated utilities (bg-field, text-ink-muted, rounded-card…)
+ * instead of raw hex values in components.
+ */
+@theme {
+  /* Reset Tailwind's palette: only brand colors exist in this app. */
+  --color-*: initial;
+
+  --color-white: #ffffff;
+  --color-transparent: transparent;
+  --color-current: currentColor;
+
+  --color-surface: #ffffff;
+  --color-surface-muted: #f7f8fa;
+  --color-field: #f0f5fd;
+  --color-blue-tint: #e1eafd;
+  --color-line: #e2e9f1;
+  --color-sky: #c4d2e2;
+  --color-switch-off: #c9d3e0;
+
+  --color-ink: #010330;
+  --color-ink-muted: #5c6785;
+  --color-ink-disabled: #a6aece;
+
+  --color-elite-blue: #0053ce;
+  --color-deep-blue: #033a8e;
+  --color-link: #0053ce;
+  --color-energy-lime: #c8ff00;
+
+  --color-success: #0f7a63;
+  --color-success-soft: #e3f4ef;
+  --color-danger: #c4262e;
+  --color-danger-soft: #fce8e9;
+  --color-danger-line: #e9b8bb;
+  --color-warning: #8a5a00;
+  --color-warning-strong: #6b4700;
+  --color-warning-soft: #fff4d6;
+  --color-warning-dot: #e0a100;
+  --color-mercado-pago: #00b1ea;
+
+  --color-scrim: rgb(1 3 48 / 45%);
+
+  /* Type scale (font-size + line-height). */
+  --text-micro: 11px;
+  --text-micro--line-height: 14px;
+  --text-caption: 12px;
+  --text-caption--line-height: 16px;
+  --text-body-sm: 13px;
+  --text-body-sm--line-height: 18px;
+  --text-label: 14px;
+  --text-label--line-height: 20px;
+  --text-body: 15px;
+  --text-body--line-height: 22px;
+  --text-body-lg: 16px;
+  --text-body-lg--line-height: 24px;
+  --text-title-3: 18px;
+  --text-title-3--line-height: 24px;
+  --text-title-card: 20px;
+  --text-title-card--line-height: 24px;
+  --text-title-2: 22px;
+  --text-title-2--line-height: 28px;
+  --text-headline: 26px;
+  --text-headline--line-height: 32px;
+  --text-title-1: 28px;
+  --text-title-1--line-height: 32px;
+  --text-kpi: 30px;
+  --text-kpi--line-height: 34px;
+  --text-display: 32px;
+  --text-display--line-height: 36px;
+  --text-hero: 64px;
+  --text-hero--line-height: 68px;
+
+  --tracking-tight: -0.01em;
+  --tracking-label: 0.08em;
+  --tracking-eyebrow: 0.14em;
+  --tracking-overline: 0.2em;
+
+  /* Radii used across the panel. */
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-control: 10px;
+  --radius-md: 12px;
+  --radius-card: 14px;
+  --radius-lg: 16px;
+  --radius-modal: 20px;
+  --radius-xl: 24px;
+
+  --shadow-modal: 0 24px 64px rgb(1 3 48 / 28%);
+  --shadow-menu: 0 16px 40px rgb(1 3 48 / 18%);
+  --shadow-drawer: -24px 0 64px rgb(1 3 48 / 20%);
+  --shadow-card: 0 24px 64px rgb(1 3 48 / 12%);
 }
 
+/* Fonts come from next/font in app/layout.tsx. */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-montserrat), system-ui, sans-serif;
+  --font-display: var(--font-viga), system-ui, sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@layer base {
+  html {
+    color-scheme: light;
   }
-}
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  body {
+    background-color: var(--color-surface-muted);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-elite-blue);
+    outline-offset: 2px;
+  }
+
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+
+  dialog::backdrop {
+    background-color: var(--color-scrim);
+  }
 }
