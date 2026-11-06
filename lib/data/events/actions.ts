@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { runAction, type ActionResult } from "@/lib/auth/guard";
 import { now, toIso } from "@/lib/dates";
-import { audit } from "@/lib/db/outbox";
+import { audit, emit, topics } from "@/lib/db/outbox";
 import { newId, type Tx } from "@/lib/db/sql";
 
 import { loadClub } from "../rows";
@@ -42,8 +42,9 @@ export type EventInput = {
 
 /*
  * Events live in in-api's club_events: the panel writes them with key `panel-<id>`. Everyone sees
- * a published event in the app; only its audience can sign up. The notification goes out from
- * in-api (portal.notify-events, every minute) at `notify_at`, once, to the audience only.
+ * a published event in the app; only its audience can sign up. in-api sends the notification
+ * once, to the audience only: right away when published, or at `notify_at` (portal.notify-events,
+ * every minute) when scheduled.
  */
 
 /** "Cancha 1 y Cancha 2", "Cancha 1, Cancha 2 y Cancha 3"; the service reads the courts back from it. */
@@ -93,7 +94,7 @@ export async function saveEvent(input: EventInput): Promise<ActionResult<{ id: s
         if (notifyAt <= now()) throw new Error("La hora del aviso ya pasó. Elegí una más tarde.");
         if (notifyAt >= endsAt) throw new Error("El aviso tiene que salir antes de que termine el evento.");
       } else if (input.publish) {
-        notifyAt = now(); // sale en el próximo minuto
+        notifyAt = now(); // sale ya (writeNotification)
       }
     }
 
@@ -112,7 +113,7 @@ export async function saveEvent(input: EventInput): Promise<ActionResult<{ id: s
           values (${eventId}, ${`panel-${eventId}`}, ${input.type}, ${title}, ${summary}, ${about}, ${place}, ${startsAt}, ${endsAt},
                   ${priceCents}, ${input.capacity}, ${audience.categories}::smallint[], ${audience.sex}::app.user_sex,
                   ${input.publish ? now() : null}::timestamptz)`;
-        await writeNotification(tx, eventId, notification, notifyAt);
+        await writeNotification(tx, eventId, notification, notifyAt, input.publish);
         await audit(tx, staff, input.publish ? "event.published" : "event.draft_saved", { type: "event", id: eventId }, { title, audience: audienceLabel(input.audience) });
         return eventId;
       }
@@ -129,7 +130,7 @@ export async function saveEvent(input: EventInput): Promise<ActionResult<{ id: s
         where id = ${input.id}`;
       // An already sent notification stays as it was.
       if (current.notified_at) notifyAt = null;
-      else await writeNotification(tx, input.id, notification, notifyAt);
+      else await writeNotification(tx, input.id, notification, notifyAt, input.publish);
       await audit(tx, staff, current.published_at || !input.publish ? "event.updated" : "event.published", { type: "event", id: input.id }, { title, audience: audienceLabel(input.audience) });
       return input.id;
     });
@@ -139,11 +140,18 @@ export async function saveEvent(input: EventInput): Promise<ActionResult<{ id: s
   });
 }
 
-async function writeNotification(tx: Tx, eventId: string, notification: EventNotificationInput | null, notifyAt: Date | null) {
+/**
+ * Stores the notification. One due now goes out right away: it is marked sent and in-api gets the
+ * event in this transaction (its every-minute job only picks the scheduled ones still pending).
+ */
+async function writeNotification(tx: Tx, eventId: string, notification: EventNotificationInput | null, notifyAt: Date | null, publish: boolean) {
+  const now = publish && notification !== null && notification.schedule === null && notifyAt !== null;
   await tx`
     update app.club_events
-    set notify_title = ${notification?.title.trim() ?? null}, notify_body = ${notification?.body.trim() ?? null}, notify_at = ${notifyAt}
+    set notify_title = ${notification?.title.trim() ?? null}, notify_body = ${notification?.body.trim() ?? null}, notify_at = ${notifyAt},
+        notified_at = ${now ? notifyAt : null}
     where id = ${eventId}`;
+  if (now) await emit(tx, { topic: topics.eventNotificationDue, aggregateType: "club_event", aggregateId: eventId, payload: { eventId } });
 }
 
 /** Hidden from the app and its pending notification dropped. Sign-ups stay (in-api never deletes them). */

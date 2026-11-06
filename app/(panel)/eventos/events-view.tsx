@@ -269,7 +269,7 @@ function EventFormModal({ event, context, onClose }: { event?: ClubEvent; contex
           : !sentAt
             ? published ? "Cambios guardados" : "Evento publicado"
             : new Date(sentAt.at).getTime() - Date.now() < 120_000
-              ? `${published ? "Cambios guardados" : "Evento publicado"} · el aviso sale en un minuto a ${formatCount(sentAt.withPush)} socios`
+              ? `${published ? "Cambios guardados" : "Evento publicado"} · el aviso sale ahora a ${formatCount(sentAt.withPush)} socios`
               : `${published ? "Cambios guardados" : "Evento publicado"} · aviso programado para el ${shortDate(sentAt.at).toLowerCase()} a las ${time(sentAt.at)}`,
       );
       onClose();

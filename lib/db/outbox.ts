@@ -30,4 +30,6 @@ export const topics = {
   bookingCancelled: "booking.cancelled",
   fixedSlotDecided: "fixed_slot.decided",
   clubConfigChanged: "club.config.changed",
+  /** in-api libs/portal: sends an event's notification to its audience (once: set notified_at with it). */
+  eventNotificationDue: "portal.event_notification_due",
 } as const;
