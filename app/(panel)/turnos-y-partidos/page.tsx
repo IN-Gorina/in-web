@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { connection } from "next/server";
 import { Suspense } from "react";
 
 import { PageSkeleton } from "@/components/shell/page-skeleton";
@@ -28,6 +29,7 @@ export default function TurnosYPartidosPage() {
 }
 
 async function TurnosYPartidosContent() {
+  await connection();
   const today = dayKey(now());
   const [matches, requests, active, counts, tools] = await Promise.all([
     listOpenMatches(today),

@@ -1,41 +1,33 @@
 /*
- * Staff roles and what each one can do. Mirrors the matrix on Paper "Panel / 13 – Staff y permisos".
- * Roles are fixed in this version; once Firebase is in, the role comes from the user's custom claims.
+ * Staff roles and what each one can do. The role comes from the user's `staff_role` custom claim
+ * (not `role`: the app's Supabase Realtime needs `role: authenticated` in the same Firebase project).
+ * There is a single superadmin, set by scripts/make-superadmin.ts; everyone invited from the panel
+ * is an admin.
  */
 
-export const staffRoles = ["admin", "recepcion"] as const;
+export const staffRoles = ["superadmin", "admin"] as const;
 export type StaffRole = (typeof staffRoles)[number];
 
 export const roleLabels: Record<StaffRole, string> = {
+  superadmin: "Superadministrador",
   admin: "Administrador",
-  recepcion: "Recepción",
 };
 
 export const permissions = [
   "agenda.ver",
   "reservas.gestionar",
-  "cobros.registrar",
   "turnosFijos.aprobar",
   "portal.moderar",
   "socios.bloquear",
-  "notificaciones.enviar",
   "senas.devolver",
   "club.configurar",
   "staff.gestionar",
 ] as const;
 export type Permission = (typeof permissions)[number];
 
-const recepcion: readonly Permission[] = [
-  "agenda.ver",
-  "reservas.gestionar",
-  "cobros.registrar",
-  "turnosFijos.aprobar",
-  "portal.moderar",
-];
-
 const grants: Record<StaffRole, readonly Permission[]> = {
-  recepcion,
-  admin: permissions,
+  superadmin: permissions,
+  admin: permissions.filter((permission) => permission !== "staff.gestionar"),
 };
 
 export function can(role: StaffRole, permission: Permission): boolean {

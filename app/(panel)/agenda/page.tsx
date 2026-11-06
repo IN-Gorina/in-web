@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { connection } from "next/server";
 import { Suspense } from "react";
 
 import { BookingToolsProvider } from "@/components/bookings/booking-tools";
@@ -28,6 +29,7 @@ export default function AgendaPage({ searchParams }: PageProps<"/agenda">) {
 }
 
 async function Agenda({ searchParams }: Pick<PageProps<"/agenda">, "searchParams">) {
+  await connection();
   const params = await searchParams;
   const today = dayKey(now());
   const day = typeof params.dia === "string" && /^\d{4}-\d{2}-\d{2}$/.test(params.dia) ? params.dia : today;

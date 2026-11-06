@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { connection } from "next/server";
 import { Suspense } from "react";
 
 import { PageSkeleton } from "@/components/shell/page-skeleton";
@@ -25,6 +26,7 @@ export default function SociosPage() {
 }
 
 async function SociosContent() {
+  await connection();
   const today = dayKey(now());
   const [members, totals, staff, courts, bookings] = await Promise.all([
     listMembers(),

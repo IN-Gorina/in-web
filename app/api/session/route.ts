@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 
 import { markSignedIn, roleOf } from "@/lib/data/staff/firebase";
 import { adminAuth } from "@/lib/firebase/admin";
-import { isFirebaseEnabled, SESSION_COOKIE, SESSION_DAYS } from "@/lib/firebase/config";
+import { SESSION_COOKIE, SESSION_DAYS } from "@/lib/firebase/config";
 
 /*
  * Session cookie (Firebase session cookies). The browser signs in with the JS SDK and posts the
@@ -20,7 +20,6 @@ const sameOrigin = (request: Request) => {
 const error = (message: string, status: number) => Response.json({ error: message }, { status });
 
 export async function POST(request: Request) {
-  if (!isFirebaseEnabled) return error("Firebase no está configurado.", 404);
   if (!sameOrigin(request)) return error("Pedido no permitido.", 403);
 
   const body = (await request.json().catch(() => null)) as { idToken?: unknown } | null;

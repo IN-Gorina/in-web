@@ -12,7 +12,6 @@ import { TextField } from "@/components/ui/field";
 import { useToast } from "@/components/ui/toast";
 import { roleLabels, type StaffRole } from "@/lib/auth/permissions";
 import { firebaseAuth, startSession } from "@/lib/firebase/client";
-import { isFirebaseEnabled } from "@/lib/firebase/config";
 import { authMessage, errorCode } from "@/lib/firebase/errors";
 
 /**
@@ -44,19 +43,17 @@ export function AccountForms({ name, email, role }: { name: string; email: strin
     if (repeat !== next) found.repeat = "Las contraseñas no coinciden.";
     setErrors(found);
     if (Object.keys(found).length) return;
-    if (isFirebaseEnabled) {
-      setPending(true);
-      try {
-        await changePassword(email, current, next);
-      } catch (error) {
-        const code = errorCode(error);
-        setErrors(
-          code === "auth/invalid-credential" || code === "auth/wrong-password" ? { current: "La contraseña actual no coincide." } : { form: authMessage(error) },
-        );
-        return;
-      } finally {
-        setPending(false);
-      }
+    setPending(true);
+    try {
+      await changePassword(email, current, next);
+    } catch (error) {
+      const code = errorCode(error);
+      setErrors(
+        code === "auth/invalid-credential" || code === "auth/wrong-password" ? { current: "La contraseña actual no coincide." } : { form: authMessage(error) },
+      );
+      return;
+    } finally {
+      setPending(false);
     }
     toast("Contraseña actualizada");
     setCurrent("");
@@ -77,9 +74,9 @@ export function AccountForms({ name, email, role }: { name: string; email: strin
         </div>
         <div className="flex items-center justify-between border-t border-line pt-4">
           <span className="text-body-sm font-medium text-ink-muted">Rol</span>
-          <Badge tone={role === "admin" ? "dark" : "info"}>{roleLabels[role]}</Badge>
+          <Badge tone={role === "superadmin" ? "dark" : "info"}>{roleLabels[role]}</Badge>
         </div>
-        <p className="text-caption font-medium text-ink-muted">Para cambiar tu nombre, correo o rol, pedíselo a un administrador desde Staff y permisos.</p>
+        <p className="text-caption font-medium text-ink-muted">Para cambiar tu nombre, correo o rol, pedíselo al superadministrador desde Staff y permisos.</p>
       </Card>
 
       <Card className="flex w-[460px] flex-col gap-5 p-6">

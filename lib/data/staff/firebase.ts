@@ -8,7 +8,7 @@ import { adminAuth, adminDb } from "@/lib/firebase/admin";
 import type { StaffMember, StaffStatus } from "../types";
 
 /*
- * Staff in Firebase. The role is a custom claim ({ role }) and is what authorizes; the
+ * Staff in Firebase. The role is a custom claim ({ staff_role }) and is what authorizes; the
  * Firestore `staff` collection (doc id = Firebase UID, Admin SDK only) holds the profile, the
  * status and the pending invitation, which Firebase Auth alone can't list.
  */
@@ -31,16 +31,16 @@ type StaffDoc = {
 const staffDocs = () => adminDb().collection("staff");
 
 export function roleOf(claims: Record<string, unknown> | undefined): StaffRole | null {
-  const role = claims?.role;
+  const role = claims?.staff_role;
   return staffRoles.find((r) => r === role) ?? null;
 }
 
-/** Sets or removes the role claim, keeping any other claims the user has. */
+/** Sets or removes the role claim, keeping any other claims the user has (the app's, for one). */
 async function setRoleClaim(uid: string, role: StaffRole | null) {
   const user = await adminAuth().getUser(uid);
   const claims = { ...user.customClaims };
-  delete claims.role;
-  await adminAuth().setCustomUserClaims(uid, role ? { ...claims, role } : claims);
+  delete claims.staff_role;
+  await adminAuth().setCustomUserClaims(uid, role ? { ...claims, staff_role: role } : claims);
 }
 
 const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
@@ -107,9 +107,9 @@ async function getDoc(id: string): Promise<StaffDoc> {
   return snapshot.data() as StaffDoc;
 }
 
-async function activeAdmins(): Promise<number> {
-  const snapshot = await staffDocs().where("role", "==", "admin").where("status", "==", "activo").count().get();
-  return snapshot.data().count;
+/** The superadmin is changed only with scripts/make-superadmin.ts. */
+function assertNotSuperadmin(person: StaffDoc) {
+  if (person.role === "superadmin") throw new Error("El superadministrador no se puede cambiar desde el panel.");
 }
 
 /**
@@ -147,23 +147,14 @@ export async function renewInvite(id: string, invitedBy: string, origin: string)
   return { link: inviteLink(origin, invite.token) };
 }
 
-export async function changeRoleInFirebase(id: string, role: StaffRole) {
-  const person = await getDoc(id);
-  if (person.role === "admin" && role !== "admin" && person.status === "activo" && (await activeAdmins()) <= 1)
-    throw new Error("Tiene que quedar al menos un administrador.");
-  // Without access there is no claim to change; restoring access uses the stored role.
-  if (person.status !== "sin-acceso") await setRoleClaim(id, role);
-  await staffDocs().doc(id).update({ role });
-}
-
 /**
  * Removing access drops the role claim (the next request lands on "Sin acceso") but doesn't
  * disable the Firebase user, so a staff member who is also a member keeps using the app.
  */
 export async function setAccessInFirebase(id: string, active: boolean) {
   const person = await getDoc(id);
+  assertNotSuperadmin(person);
   if (!active) {
-    if (person.role === "admin" && person.status === "activo" && (await activeAdmins()) <= 1) throw new Error("Tiene que quedar al menos un administrador.");
     await setRoleClaim(id, null);
     await staffDocs().doc(id).update({ status: "sin-acceso", inviteTokenHash: null, inviteExpiresAt: null });
     return;

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { connection } from "next/server";
 import { Suspense } from "react";
 
 import { BookingToolsProvider } from "@/components/bookings/booking-tools";
@@ -37,6 +38,7 @@ export default function MemberPage({ params }: PageProps<"/socios/[id]">) {
 }
 
 async function Profile({ params }: Pick<PageProps<"/socios/[id]">, "params">) {
+  await connection();
   const { id } = await params;
   const member = await getMember(id);
   if (!member) notFound();

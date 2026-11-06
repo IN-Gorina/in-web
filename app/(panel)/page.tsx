@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { connection } from "next/server";
 import { Suspense } from "react";
 
 import { PageSkeleton } from "@/components/shell/page-skeleton";
@@ -32,6 +33,7 @@ export default function ResumenPage() {
 }
 
 async function ResumenContent() {
+  await connection();
   const [staff, stats] = await Promise.all([getCurrentStaff(), getDashboard()]);
 
   return (

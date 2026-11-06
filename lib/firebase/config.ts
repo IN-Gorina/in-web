@@ -11,9 +11,6 @@ export const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
 
-/** Without the Web app config the panel runs with the mock session ("Modo sin Firebase"). */
-export const isFirebaseEnabled = Boolean(firebaseConfig.apiKey && firebaseConfig.authDomain && firebaseConfig.projectId && firebaseConfig.appId);
-
 /** httpOnly cookie holding the Firebase session cookie. Read by proxy.ts and the session service. */
 export const SESSION_COOKIE = "in_session";
 

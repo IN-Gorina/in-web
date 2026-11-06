@@ -31,7 +31,6 @@ export const navSections: NavSection[] = [
       { href: "/socios", label: "Socios", icon: "users" },
       { href: "/moderacion", label: "Moderación", icon: "news", badge: "openReports" },
       { href: "/eventos", label: "Eventos", icon: "calendar-star" },
-      { href: "/notificaciones", label: "Notificaciones", icon: "bell", permission: "notificaciones.enviar" },
     ],
   },
   {

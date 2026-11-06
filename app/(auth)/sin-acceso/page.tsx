@@ -2,8 +2,6 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 
 import { getSignedInAccount } from "@/lib/data/session/service";
-import { listStaff } from "@/lib/data/staff/service";
-import { isFirebaseEnabled } from "@/lib/firebase/config";
 
 import { AuthHeader, NoAccess } from "../auth-form";
 
@@ -19,11 +17,6 @@ export default function SinAccesoPage() {
 }
 
 async function SignedInAccount() {
-  if (isFirebaseEnabled) {
-    const account = await getSignedInAccount();
-    return <NoAccess name={account?.name ?? "Sin sesión"} email={account?.email ?? ""} />;
-  }
-  const staff = await listStaff();
-  const person = staff.find((s) => s.status === "sin-acceso") ?? { name: "Socio", email: "" };
-  return <NoAccess name={person.name} email={person.email} />;
+  const account = await getSignedInAccount();
+  return <NoAccess name={account?.name ?? "Sin sesión"} email={account?.email ?? ""} />;
 }

@@ -1,37 +1,28 @@
 import "server-only";
 
-import { addDays, dayKey } from "@/lib/dates";
+import { addDays, toIso } from "@/lib/dates";
 
-import { mockResponse } from "../backend";
-import { db } from "../mock/store";
+import { iso, loadClub, queryBookings } from "../rows";
 import type { Booking, CourtBlock } from "../types";
-
-const byStart = (a: { start: string }, b: { start: string }) => a.start.localeCompare(b.start);
 
 /** Bookings whose day (club time) is between `from` and `to`, both inclusive ("YYYY-MM-DD"). */
 export async function listBookings({ from, to }: { from: string; to: string }): Promise<Booking[]> {
-  const bookings = db()
-    .bookings.filter((booking) => {
-      const day = dayKey(booking.start);
-      return day >= from && day <= to;
-    })
-    .sort(byStart);
-  return mockResponse(bookings);
+  return queryBookings(
+    (db) => db`lower(o.period) >= ${toIso(from, "00:00")}::timestamptz and lower(o.period) < ${toIso(addDays(to, 1), "00:00")}::timestamptz`,
+  );
 }
 
 export async function getBooking(id: string): Promise<Booking | null> {
-  return mockResponse(db().bookings.find((booking) => booking.id === id) ?? null);
+  const [booking] = await queryBookings((db) => db`o.id = ${id}`);
+  return booking ?? null;
 }
 
-/** Bookings a member organizes or plays in (open matches list players by name). */
+/** Bookings a member organizes or plays in. */
 export async function listMemberBookings(memberId: string): Promise<Booking[]> {
-  const name = db().members.find((member) => member.id === memberId)?.name;
-  return mockResponse(
-    db()
-      .bookings.filter(
-        (booking) => booking.organizer.memberId === memberId || (name !== undefined && booking.match?.players.includes(name)),
-      )
-      .sort(byStart),
+  return queryBookings(
+    (db) => db`(o.user_id = ${memberId} or exists (
+      select 1 from app.matches mm join app.match_participants mp on mp.match_id = mm.id
+      where mm.booking_id = o.id and mp.user_id = ${memberId}))`,
   );
 }
 
@@ -39,20 +30,35 @@ export type AgendaDay = { bookings: Booking[]; blocks: CourtBlock[] };
 
 /** Everything that occupies a court on `day`, cancelled bookings excluded. */
 export async function getAgendaDay(day: string): Promise<AgendaDay> {
-  const store = db();
-  return mockResponse({
-    bookings: store.bookings.filter((booking) => !booking.cancelled && dayKey(booking.start) === day).sort(byStart),
-    blocks: store.blocks.filter((block) => dayKey(block.start) === day),
-  });
+  const start = toIso(day, "00:00");
+  const end = toIso(addDays(day, 1), "00:00");
+  const [bookings, { closures, courts }] = await Promise.all([
+    queryBookings(
+      (db) => db`o.status in ('held', 'confirmed', 'completed', 'no_show')
+        and o.period && tstzrange(${start}::timestamptz, ${end}::timestamptz)`,
+    ),
+    loadClub(),
+  ]);
+  const blocks: CourtBlock[] = closures
+    .filter((closure) => closure.starts_at < new Date(end) && closure.ends_at > new Date(start))
+    .map((closure) => ({
+      id: closure.id,
+      courtIds: closure.court_ids ?? courts.map((court) => court.id),
+      start: iso(closure.starts_at),
+      end: iso(closure.ends_at),
+      reason: closure.key.startsWith("mantenimiento") ? "mantenimiento" : "otro",
+      title: closure.reason,
+    }));
+  return { bookings, blocks };
 }
 
 /** Open matches from today on. */
 export async function listOpenMatches(today: string): Promise<Booking[]> {
-  return mockResponse(
-    db()
-      .bookings.filter((booking) => booking.match && !booking.cancelled && dayKey(booking.start) >= today)
-      .sort(byStart),
+  const bookings = await queryBookings(
+    (db) => db`o.status in ('held', 'confirmed') and lower(o.period) >= ${toIso(today, "00:00")}::timestamptz
+      and exists (select 1 from app.matches mm where mm.booking_id = o.id)`,
   );
+  return bookings.filter((booking) => booking.match);
 }
 
 export function weekRange(day: string): { from: string; to: string } {

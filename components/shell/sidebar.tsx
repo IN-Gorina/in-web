@@ -5,9 +5,7 @@ import { Suspense } from "react";
 import { can } from "@/lib/auth/permissions";
 import { getAttentionCounts } from "@/lib/data/attention/service";
 import type { StaffMember } from "@/lib/data/types";
-import { isFirebaseEnabled } from "@/lib/firebase/config";
 
-import { Badge } from "../ui/badge";
 import { Skeleton } from "../ui/states";
 import { AccountMenu } from "./account-menu";
 import { navSections } from "./nav";
@@ -38,11 +36,6 @@ export async function Sidebar({ staff }: { staff: StaffMember }) {
         </Suspense>
       </div>
 
-      {!isFirebaseEnabled && (
-        <Badge tone="warning" className="self-start">
-          Modo sin Firebase
-        </Badge>
-      )}
       <AccountMenu name={staff.name} email={staff.email} role={staff.role} />
     </aside>
   );

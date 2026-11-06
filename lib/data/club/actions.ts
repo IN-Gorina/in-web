@@ -3,12 +3,22 @@
 import { revalidatePath } from "next/cache";
 
 import { runAction, type ActionResult } from "@/lib/auth/guard";
-import { dayKey, now, nowIso, toIso } from "@/lib/dates";
+import { addDays, dayKey, now, time, toIso } from "@/lib/dates";
+import { audit } from "@/lib/db/outbox";
+import { newId, sql } from "@/lib/db/sql";
 
-import { db, newId } from "../mock/store";
-import type { BookingRules, ClosedDay, ClubSettings, CourtType, RateBand } from "../types";
+import { personName } from "../rows";
+import type { BookingRules, ClubSettings, CourtType, RateBand } from "../types";
+import { activeBookingsIn, cancelOccupancy, clubChanged, lockOccupancy, NOT_AVAILABLE, withTx } from "../writes";
+import { unavailableKey } from "./service";
 
 const refresh = () => revalidatePath("/", "layout");
+
+/*
+ * The club lives in in-api's tables (club, club_courts, club_closures). Every change bumps the
+ * config version and publishes club.config.changed: in-api reloads it and turns closures into
+ * blocks on the courts. Rates, hours and new courts still come from in-api's club.yaml.
+ */
 
 // ── Canchas ───────────────────────────────────────────────────────────
 
@@ -19,120 +29,173 @@ export type CourtInput = {
   maintenance: { until: string; reason: string } | null; // until: "YYYY-MM-DDTHH:mm"
 };
 
-export async function saveCourt(input: CourtInput): Promise<ActionResult<{ id: string }>> {
+export async function saveCourt(_input: CourtInput): Promise<ActionResult<{ id: string }>> {
   return runAction("club.configurar", () => {
-    const store = db();
-    const name = input.name.trim();
-    if (name.length < 2) throw new Error("Escribí el nombre de la cancha.");
-    if (store.courts.some((c) => c.id !== input.id && c.name.toLowerCase() === name.toLowerCase())) throw new Error("Ya hay una cancha con ese nombre.");
-    let maintenance: { until: string; reason: string } | undefined;
-    if (input.maintenance) {
-      const [day, time] = input.maintenance.until.split("T");
-      if (!day || !time) throw new Error("Elegí hasta cuándo está en mantenimiento.");
-      const until = toIso(day, time);
-      if (new Date(until) <= now()) throw new Error("La fecha de fin del mantenimiento ya pasó.");
-      maintenance = { until, reason: input.maintenance.reason.trim() || "Mantenimiento" };
-    }
-    const existing = input.id ? store.courts.find((c) => c.id === input.id) : undefined;
-    if (existing) {
-      existing.name = name;
-      existing.type = input.type;
-      existing.maintenance = maintenance;
-      refresh();
-      return { id: existing.id };
-    }
-    const number = store.courts.length + 1;
-    const court = { id: newId("c"), name, shortName: `C${number}`, type: input.type, enabled: true, slotsPerDay: 10, maintenance };
-    store.courts.push(court);
-    refresh();
-    return { id: court.id };
+    throw new Error(NOT_AVAILABLE);
   });
 }
 
 export async function setCourtEnabled(input: { id: string; enabled: boolean }): Promise<ActionResult> {
+  return runAction("club.configurar", (staff) =>
+    withTx(async (tx) => {
+      const [court] = await tx`update app.club_courts set active = ${input.enabled} where id = ${input.id} returning id`;
+      if (!court) throw new Error("No encontramos la cancha.");
+      await audit(tx, staff, input.enabled ? "court.enabled" : "court.disabled", { type: "court", id: input.id });
+      await clubChanged(tx);
+      refresh();
+      return undefined;
+    }),
+  );
+}
+
+export async function removeCourt(_id: string): Promise<ActionResult> {
   return runAction("club.configurar", () => {
-    const court = db().courts.find((c) => c.id === input.id);
-    if (!court) throw new Error("No encontramos la cancha.");
-    court.enabled = input.enabled;
-    refresh();
-    return undefined;
+    throw new Error(NOT_AVAILABLE);
   });
 }
 
-export async function removeCourt(id: string): Promise<ActionResult> {
+// ── Tarifas, reglas y datos del club (todavía desde club.yaml) ────────
+
+export async function saveRatesAndRules(_input: { rates: RateBand[]; rules: BookingRules }): Promise<ActionResult> {
   return runAction("club.configurar", () => {
-    const store = db();
-    const future = store.bookings.filter((b) => b.courtId === id && !b.cancelled && new Date(b.start) > now());
-    if (future.length) throw new Error(`Tiene ${future.length} reservas futuras. Movelas o cancelalas antes de darla de baja.`);
-    store.courts = store.courts.filter((c) => c.id !== id);
-    refresh();
-    return undefined;
+    throw new Error(NOT_AVAILABLE);
   });
 }
 
-// ── Tarifas y reglas ──────────────────────────────────────────────────
-
-export async function saveRatesAndRules(input: { rates: RateBand[]; rules: BookingRules }): Promise<ActionResult> {
+export async function saveClubSettings(_input: Omit<ClubSettings, "closedDays" | "categories"> & { categories: ClubSettings["categories"] }): Promise<ActionResult> {
   return runAction("club.configurar", () => {
-    for (const band of input.rates) {
-      for (const value of [band.weekday, band.saturday, band.sunday]) {
-        if (!Number.isFinite(value) || value <= 0) throw new Error(`Revisá las tarifas de ${band.label.toLowerCase()}: tienen que ser mayores a cero.`);
-      }
-    }
-    if (input.rules.depositRequired && input.rules.depositAmount <= 0) throw new Error("Escribí el monto de la seña.");
-    const store = db();
-    store.rates = input.rates;
-    store.rules = input.rules;
-    refresh();
-    return undefined;
+    throw new Error(NOT_AVAILABLE);
   });
 }
 
-// ── Configuración del club ────────────────────────────────────────────
+// ── Días cerrados ─────────────────────────────────────────────────────
 
-export async function saveClubSettings(input: Omit<ClubSettings, "closedDays" | "categories"> & { categories: ClubSettings["categories"] }): Promise<ActionResult> {
-  return runAction("club.configurar", () => {
-    if (input.name.trim().length < 3) throw new Error("Escribí el nombre del club.");
-    for (const [day, hours] of Object.entries(input.hours)) {
-      if (hours.open && (!/^\d{2}:\d{2}$/.test(hours.from) || !/^\d{2}:\d{2}$/.test(hours.to))) throw new Error(`Revisá el horario del ${day}.`);
-    }
-    const store = db();
-    store.settings = { ...store.settings, ...input, name: input.name.trim(), closedDays: store.settings.closedDays };
-    refresh();
-    return undefined;
-  });
-}
-
-/** Closes the club on a date range: cancels bookings and fixed-slot turns in it, refunding deposits. */
+/** Closes the whole club on a date range: cancels the bookings in it, refunding deposits. */
 export async function addClosedDay(input: { from: string; to: string; reason: string }): Promise<ActionResult<{ cancelled: number }>> {
   return runAction("club.configurar", (staff) => {
     if (!input.from || !input.to) throw new Error("Elegí las fechas.");
     if (input.to < input.from) throw new Error("La fecha de fin tiene que ser igual o posterior a la de inicio.");
     if (input.from < dayKey(now())) throw new Error("No se pueden cerrar días que ya pasaron.");
-    if (input.reason.trim().length < 3) throw new Error("Escribí el motivo: lo ven los socios.");
-    const store = db();
-    const closed: ClosedDay = { id: newId("cd"), from: input.from, to: input.to, reason: input.reason.trim() };
-    store.settings.closedDays.push(closed);
-    store.settings.closedDays.sort((a, b) => a.from.localeCompare(b.from));
-    let cancelled = 0;
-    for (const booking of store.bookings) {
-      const day = dayKey(booking.start);
-      if (booking.cancelled || day < input.from || day > input.to) continue;
-      booking.cancelled = { at: nowIso(), by: staff.name };
-      if (booking.depositStatus === "pagada") booking.depositStatus = "devuelta";
-      booking.history.unshift({ at: nowIso(), text: `Cancelada: el club cierra (${closed.reason})`, by: staff.name });
-      cancelled++;
-    }
-    refresh();
-    return { cancelled };
+    const reason = input.reason.trim();
+    if (reason.length < 3) throw new Error("Escribí el motivo: lo ven los socios.");
+    const start = toIso(input.from, "00:00");
+    const end = toIso(addDays(input.to, 1), "00:00");
+    return withTx(async (tx) => {
+      const id = newId();
+      await tx`
+        insert into app.club_closures (id, key, starts_at, ends_at, court_ids, reason)
+        values (${id}, ${`panel-cierre-${id}`}, ${start}, ${end}, null, ${reason})`;
+      const bookings = await tx<{ id: string }[]>`
+        select id from app.court_occupancy
+        where kind = 'booking' and status in ('held', 'confirmed')
+          and period && tstzrange(${start}::timestamptz, ${end}::timestamptz)`;
+      for (const { id: bookingId } of bookings) {
+        const row = await lockOccupancy(tx, bookingId);
+        if (row) await cancelOccupancy(tx, row, staff, { refund: true, reason: `El club cierra: ${reason}` });
+      }
+      await audit(tx, staff, "club.closed_days_added", { type: "closure", id }, { from: input.from, to: input.to, reason });
+      await clubChanged(tx);
+      refresh();
+      return { cancelled: bookings.length };
+    });
   });
 }
 
 export async function removeClosedDay(id: string): Promise<ActionResult> {
-  return runAction("club.configurar", () => {
-    const store = db();
-    store.settings.closedDays = store.settings.closedDays.filter((d) => d.id !== id);
-    refresh();
-    return undefined;
+  return runAction("club.configurar", (staff) =>
+    withTx(async (tx) => {
+      const [closure] = await tx`delete from app.club_closures where id = ${id} returning id`;
+      if (!closure) throw new Error("Ese cierre ya no existe.");
+      await audit(tx, staff, "club.closed_days_removed", { type: "closure", id });
+      await clubChanged(tx);
+      refresh();
+      return undefined;
+    }),
+  );
+}
+
+// ── Orden de las canchas en la app ────────────────────────────────────
+
+const isDay = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
+
+/**
+ * The order the app shows the courts in: for a day (it overrides the default) or the default one
+ * (date null). Only the display order: "any court" bookings still follow the club's court order.
+ * in-api reads it on every availability request, so there is no event.
+ */
+export async function saveCourtOrder(input: { date: string | null; courtIds: string[] }): Promise<ActionResult> {
+  return runAction("club.configurar", (staff) => {
+    if (input.date !== null && !isDay(input.date)) throw new Error("Elegí el día.");
+    if (input.date !== null && input.date < dayKey(now())) throw new Error("No se puede cambiar el orden de días que ya pasaron.");
+    if (input.courtIds.length === 0 || new Set(input.courtIds).size !== input.courtIds.length) throw new Error("Revisá el orden de las canchas.");
+    return withTx(async (tx) => {
+      await tx`delete from app.court_display_priorities where date is not distinct from ${input.date}::date`;
+      await tx`
+        insert into app.court_display_priorities (court_id, date, priority)
+        select court_id, ${input.date}::date, priority
+        from unnest(${input.courtIds}::uuid[]) with ordinality as o(court_id, priority)`;
+      await audit(tx, staff, "court.order_set", { type: "club", id: "1" }, { date: input.date, courtIds: input.courtIds });
+      refresh();
+      return undefined;
+    });
+  });
+}
+
+/** The day goes back to the default order. */
+export async function resetCourtOrder(date: string): Promise<ActionResult> {
+  return runAction("club.configurar", (staff) =>
+    withTx(async (tx) => {
+      await tx`delete from app.court_display_priorities where date = ${date}::date`;
+      await audit(tx, staff, "court.order_reset", { type: "club", id: "1" }, { date });
+      refresh();
+      return undefined;
+    }),
+  );
+}
+
+function wholeDay(date: string) {
+  return { start: toIso(date, "00:00"), end: toIso(addDays(date, 1), "00:00") };
+}
+
+/** Bookings that making the court unavailable that day would cancel. */
+export async function previewCourtUnavailable(input: { date: string; courtId: string }): Promise<ActionResult<{ name: string; time: string }[]>> {
+  return runAction("club.configurar", async () => {
+    const { start, end } = wholeDay(input.date);
+    return (await activeBookingsIn(sql(), [input.courtId], start, end)).map((b) => ({ name: personName(b), time: time(b.starts_at) }));
+  });
+}
+
+/**
+ * A whole-day closure for one court (in-api takes it out of the app that day). Its bookings are
+ * cancelled with the deposit refunded, as with any block; unmarking it deletes the closure.
+ */
+export async function setCourtUnavailable(input: { date: string; courtId: string; unavailable: boolean }): Promise<ActionResult<{ cancelled: number }>> {
+  return runAction("club.configurar", (staff) => {
+    if (!isDay(input.date) || input.date < dayKey(now())) throw new Error("Elegí un día de hoy en adelante.");
+    const key = unavailableKey(input.date, input.courtId);
+    return withTx(async (tx) => {
+      let cancelled = 0;
+      if (input.unavailable) {
+        const { start, end } = wholeDay(input.date);
+        const [court] = await tx<{ name: string }[]>`select name from app.club_courts where id = ${input.courtId}`;
+        if (!court) throw new Error("No encontramos la cancha.");
+        await tx`
+          insert into app.club_closures (id, key, starts_at, ends_at, court_ids, reason)
+          values (${newId()}, ${key}, ${start}, ${end}, ${[input.courtId]}::uuid[], ${`${court.name} no disponible`})
+          on conflict (key) do nothing`;
+        const bookings = await activeBookingsIn(tx, [input.courtId], start, end);
+        for (const booking of bookings) {
+          const row = await lockOccupancy(tx, booking.id);
+          if (row) await cancelOccupancy(tx, row, staff, { refund: true, reason: `${court.name} no disponible ese día` });
+        }
+        cancelled = bookings.length;
+      } else {
+        await tx`delete from app.club_closures where key = ${key}`;
+      }
+      await audit(tx, staff, input.unavailable ? "court.unavailable" : "court.available", { type: "court", id: input.courtId }, { date: input.date });
+      await clubChanged(tx);
+      refresh();
+      return { cancelled };
+    });
   });
 }

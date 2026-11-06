@@ -28,6 +28,7 @@ const paths = {
   "chevron-down": ["M6 9l6 6l6-6"],
   "chevron-left": ["M15 18l-6-6l6-6"],
   "chevron-right": ["M9 6l6 6l-6 6"],
+  "chevron-up": ["M6 15l6-6l6 6"],
   send: ["M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"],
   eye: ["M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z", "M9 12a3 3 0 1 0 6 0a3 3 0 1 0-6 0"],
   "eye-off": [

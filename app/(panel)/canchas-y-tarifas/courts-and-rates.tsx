@@ -17,9 +17,12 @@ import { Select } from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
 import { removeCourt, saveCourt, saveRatesAndRules, setCourtEnabled } from "@/lib/data/club/actions";
+import type { CourtOrder } from "@/lib/data/club/service";
 import type { BookingRules, Court, CourtType, RateBand } from "@/lib/data/types";
 import { dayKey, relativeDay, time } from "@/lib/dates";
 import { formatMoney } from "@/lib/format";
+
+import { CourtOrderCard } from "./court-order-card";
 
 export function CourtsAndRates({
   title,
@@ -28,6 +31,8 @@ export function CourtsAndRates({
   rates: initialRates,
   rules: initialRules,
   nowIso,
+  order,
+  today,
 }: {
   title: string;
   subtitle: string;
@@ -35,6 +40,8 @@ export function CourtsAndRates({
   rates: RateBand[];
   rules: BookingRules;
   nowIso: string;
+  order: CourtOrder;
+  today: string;
 }) {
   const toast = useToast();
   const [pending, startTransition] = useTransition();
@@ -94,7 +101,9 @@ export function CourtsAndRates({
           </button>
         </Card>
 
-        <div className="flex min-w-0 flex-1 flex-col gap-5">
+        <div className="flex min-w-0 flex-1 flex-col gap-5 overflow-y-auto">
+          {/* Keyed by day and saved order: switching days or resetting starts from what is saved. */}
+          <CourtOrderCard key={`${order.date ?? "defecto"}:${order.courts.map((c) => c.id).join()}`} order={order} today={today} />
           <Card className="flex flex-col gap-4 p-6">
             <div className="flex flex-col gap-1">
               <CardTitle title="Tarifas por franja" />

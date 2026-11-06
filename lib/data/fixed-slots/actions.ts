@@ -3,119 +3,136 @@
 import { revalidatePath } from "next/cache";
 
 import { runAction, type ActionResult } from "@/lib/auth/guard";
-import { addDays, dayKey, now, nowIso, toIso, weekdayLabels, weekdayOf } from "@/lib/dates";
+import { emit, audit, topics } from "@/lib/db/outbox";
+import type { Tx } from "@/lib/db/sql";
 
-import { priceFor } from "../club/pricing";
-import { db, newId } from "../mock/store";
 import type { Weekday } from "../types";
+import { cancelOccupancy, lockOccupancy, NOT_AVAILABLE, withTx } from "../writes";
 
 const refresh = () => revalidatePath("/", "layout");
 
-/** Next date (from today) that falls on `weekday`. */
-function nextDate(weekday: Weekday, from = dayKey(now())): string {
-  let day = from;
-  for (let i = 0; i < 7 && weekdayOf(`${day}T12:00:00-03:00`) !== weekday; i++) day = addDays(day, 1);
-  return day;
+/*
+ * Fixed slots are in-api's recurring_bookings. Deciding a request mirrors FixedSlotsService.decide:
+ * same changes and the same fixed_slot.decided event (in-api notifies the member). in-api's
+ * scheduler then books the approved weeks (every 5 minutes).
+ */
+
+type SlotRow = { id: string; user_id: string | null; status: string; court_id: string | null; weekday: number; start_minute: number; duration_minutes: number; starts_on: string };
+
+async function lockPending(tx: Tx, id: string): Promise<SlotRow & { user_id: string }> {
+  const [slot] = await tx<SlotRow[]>`
+    select id, user_id, status, court_id, weekday, start_minute, duration_minutes, starts_on::text
+    from app.recurring_bookings where id = ${id} for update`;
+  if (!slot?.user_id || slot.status !== "pending") throw new Error("Ese pedido ya fue resuelto.");
+  return slot as SlotRow & { user_id: string };
+}
+
+/** Courts of `candidates` free on every one of the slot's next weeks, in the club's order. */
+async function freeCourts(tx: Tx, slot: SlotRow, candidates: string[]): Promise<string[]> {
+  const [club] = await tx<{ weeks: number }[]>`select fixed_slot_weeks as weeks from app.club limit 1`;
+  const weeks = club?.weeks ?? 8;
+  const busy = await tx<{ court_id: string }[]>`
+    with days as (
+      select (date_trunc('week', greatest(${slot.starts_on}::date, current_date)) + make_interval(days => ${slot.weekday} + 7 * w))::date as d
+      from generate_series(0, ${weeks - 1}) w
+    ),
+    ranges as (
+      select tstzrange(
+        (d + make_interval(mins => ${slot.start_minute}))::timestamp at time zone 'America/Argentina/Buenos_Aires',
+        (d + make_interval(mins => ${slot.start_minute + slot.duration_minutes}))::timestamp at time zone 'America/Argentina/Buenos_Aires') as r
+      from days where d >= greatest(${slot.starts_on}::date, current_date)
+    )
+    select distinct o.court_id from app.court_occupancy o join ranges on o.period && ranges.r
+    where o.court_id = any(${candidates}::uuid[]) and o.status in ('held', 'confirmed')`;
+  const taken = new Set(busy.map((b) => b.court_id));
+  const ordered = await tx<{ id: string }[]>`
+    select id from app.club_courts where id = any(${candidates}::uuid[]) and active order by sort_order`;
+  return ordered.map((c) => c.id).filter((id) => !taken.has(id));
+}
+
+async function decided(tx: Tx, slot: SlotRow & { user_id: string }, outcome: "approved" | "rejected", reason: string | null) {
+  await emit(tx, {
+    topic: topics.fixedSlotDecided,
+    aggregateType: "fixed_slot",
+    aggregateId: slot.id,
+    payload: { fixedSlotId: slot.id, userId: slot.user_id, outcome, reason },
+  });
 }
 
 export async function approveFixedSlot(input: { id: string; courtId?: string }): Promise<ActionResult> {
-  return runAction("turnosFijos.aprobar", () => {
-    const slot = db().fixedSlots.find((s) => s.id === input.id);
-    if (!slot || slot.status !== "pedido") throw new Error("Ese pedido ya fue resuelto.");
-    const courtId = input.courtId ?? slot.courtId ?? slot.availability?.suggestedCourtId;
-    if (!courtId) throw new Error("Elegí en qué cancha queda el turno fijo.");
-    slot.courtId = courtId;
-    slot.status = "activo";
-    slot.thisWeek = "empieza";
-    slot.since = slot.since < dayKey(now()) ? nextDate(slot.weekday) : slot.since;
-    refresh();
-    return undefined;
-  });
+  return runAction("turnosFijos.aprobar", (staff) =>
+    withTx(async (tx) => {
+      const slot = await lockPending(tx, input.id);
+      const [club] = await tx<{ court_ids: string[] | null }[]>`select fixed_slot_court_ids as court_ids from app.club limit 1`;
+      const candidates = input.courtId ? [input.courtId] : slot.court_id ? [slot.court_id] : (club?.court_ids ?? []);
+      if (candidates.length === 0) throw new Error("Elegí en qué cancha queda el turno fijo.");
+      const [courtId] = await freeCourts(tx, slot, candidates);
+      if (!courtId) throw new Error("Ese horario no está libre todas las semanas. Elegí otra cancha o rechazá el pedido.");
+      await tx`
+        update app.recurring_bookings set status = 'active', active = true, court_id = ${courtId}, decided_at = now()
+        where id = ${slot.id}`;
+      await decided(tx, slot, "approved", null);
+      await audit(tx, staff, "fixed_slot.approved", { type: "fixed_slot", id: slot.id }, { courtId });
+      refresh();
+      return undefined;
+    }),
+  );
 }
 
 export async function rejectFixedSlot(input: { id: string; reason: string; offer?: { courtId: string; time: string } }): Promise<ActionResult> {
+  return runAction("turnosFijos.aprobar", (staff) =>
+    withTx(async (tx) => {
+      const slot = await lockPending(tx, input.id);
+      const reason = [input.reason.trim(), input.offer ? `Te ofrecemos las ${input.offer.time}.` : ""].filter(Boolean).join(" ") || null;
+      await tx`
+        update app.recurring_bookings set status = 'rejected', decided_at = now(), rejection_reason = ${reason}
+        where id = ${slot.id}`;
+      await decided(tx, slot, "rejected", reason);
+      await audit(tx, staff, "fixed_slot.rejected", { type: "fixed_slot", id: slot.id }, { reason });
+      refresh();
+      return undefined;
+    }),
+  );
+}
+
+export async function createFixedSlot(_input: { memberId: string; weekday: Weekday; time: string; durationMin: 60 | 90; courtId: string; since: string }): Promise<ActionResult> {
   return runAction("turnosFijos.aprobar", () => {
-    const store = db();
-    const slot = store.fixedSlots.find((s) => s.id === input.id);
-    if (!slot || slot.status !== "pedido") throw new Error("Ese pedido ya fue resuelto.");
-    const court = input.offer ? store.courts.find((c) => c.id === input.offer!.courtId) : undefined;
-    slot.status = "baja";
-    slot.rejection = {
-      reason: input.reason,
-      offer: input.offer && court ? `${weekdayLabels[slot.weekday].long} ${input.offer.time} · ${court.name}` : undefined,
-    };
-    refresh();
-    return undefined;
+    throw new Error(NOT_AVAILABLE);
   });
 }
 
-export async function createFixedSlot(input: {
-  memberId: string;
-  weekday: Weekday;
-  time: string;
-  durationMin: 60 | 90;
-  courtId: string;
-  since: string;
-}): Promise<ActionResult> {
-  return runAction("turnosFijos.aprobar", () => {
-    const store = db();
-    const member = store.members.find((m) => m.id === input.memberId);
-    if (!member) throw new Error("Elegí el titular del turno fijo.");
-    if (!/^\d{2}:\d{2}$/.test(input.time)) throw new Error("Revisá la hora: usá el formato 20:00.");
-    const taken = store.fixedSlots.find(
-      (s) => s.status === "activo" && s.courtId === input.courtId && s.weekday === input.weekday && s.time === input.time,
-    );
-    if (taken) throw new Error(`Ese horario ya es el turno fijo de ${taken.holder.name}.`);
-    const since = nextDate(input.weekday, input.since);
-    store.fixedSlots.push({
-      id: newId("fs"),
-      holder: { memberId: member.id, name: member.name, note: "Cargado en recepción" },
-      weekday: input.weekday,
-      time: input.time,
-      durationMin: input.durationMin,
-      courtId: input.courtId,
-      status: "activo",
-      since,
-      price: priceFor(store.rates, toIso(since, input.time), input.durationMin).price,
-      thisWeek: since === dayKey(now()) ? "reservado" : "empieza",
-    });
-    refresh();
-    return undefined;
-  });
-}
-
+/** Ends an active fixed slot: no more weeks are booked, and the upcoming ones are cancelled. */
 export async function endFixedSlot(id: string): Promise<ActionResult> {
-  return runAction("turnosFijos.aprobar", () => {
-    const slot = db().fixedSlots.find((s) => s.id === id);
-    if (!slot || slot.status !== "activo") throw new Error("Ese turno fijo ya no está activo.");
-    slot.status = "baja";
-    slot.thisWeek = undefined;
-    refresh();
-    return undefined;
-  });
+  return runAction("turnosFijos.aprobar", (staff) =>
+    withTx(async (tx) => {
+      const [slot] = await tx`
+        update app.recurring_bookings set status = 'cancelled', active = false, ends_on = current_date
+        where id = ${id} and status = 'active' returning id`;
+      if (!slot) throw new Error("Ese turno fijo ya no está activo.");
+      const weeks = await tx<{ id: string }[]>`
+        select id from app.court_occupancy
+        where recurring_id = ${id} and status = 'confirmed' and lower(period) > now()`;
+      for (const week of weeks) {
+        const row = await lockOccupancy(tx, week.id);
+        if (row) await cancelOccupancy(tx, row, staff, { refund: false, reason: "Baja del turno fijo" });
+      }
+      await audit(tx, staff, "fixed_slot.ended", { type: "fixed_slot", id });
+      refresh();
+      return undefined;
+    }),
+  );
 }
 
-// ── Partidos abiertos ─────────────────────────────────────────────────
+// ── Partidos abiertos (los maneja el organizador desde la app) ────────
 
-/** Push to members of a compatible level who follow open matches. Mocked: returns the audience size. */
-export async function notifyCompatiblePlayers(bookingId: string): Promise<ActionResult<{ count: number }>> {
+export async function notifyCompatiblePlayers(_bookingId: string): Promise<ActionResult<{ count: number }>> {
   return runAction("reservas.gestionar", () => {
-    const booking = db().bookings.find((b) => b.id === bookingId);
-    if (!booking?.match) throw new Error("Ese partido ya no existe.");
-    booking.history.unshift({ at: nowIso(), text: `Avisamos a socios de ${booking.match.level}` });
-    refresh();
-    return { count: 40 + booking.match.level.length * 9 };
+    throw new Error(NOT_AVAILABLE);
   });
 }
 
-/** Stops publishing the match in Social › Partidos. The booking and its deposit stay with the organizer. */
-export async function closeMatch(bookingId: string): Promise<ActionResult> {
-  return runAction("reservas.gestionar", (staff) => {
-    const booking = db().bookings.find((b) => b.id === bookingId);
-    if (!booking?.match) throw new Error("Ese partido ya no existe.");
-    booking.match.closed = true;
-    booking.history.unshift({ at: nowIso(), text: "Partido cerrado desde el panel", by: staff.name });
-    refresh();
-    return undefined;
+export async function closeMatch(_bookingId: string): Promise<ActionResult> {
+  return runAction("reservas.gestionar", () => {
+    throw new Error(NOT_AVAILABLE);
   });
 }

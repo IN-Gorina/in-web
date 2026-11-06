@@ -13,7 +13,7 @@ import {
   type User,
 } from "firebase/auth";
 
-import { firebaseConfig, isFirebaseEnabled } from "./config";
+import { firebaseConfig } from "./config";
 import { SessionError } from "./errors";
 
 /*
@@ -53,15 +53,13 @@ export async function signInWithGoogle(): Promise<User> {
   return user;
 }
 
-/** Clears the session cookie. In mock mode there is nothing to clear. */
+/** Clears the session cookie. */
 export async function endSession(): Promise<void> {
-  if (!isFirebaseEnabled) return;
   await signOut(firebaseAuth()).catch(() => {});
   await fetch("/api/session", { method: "DELETE" }).catch(() => {});
 }
 
 /** Firebase sends the email (Spanish template). The link comes back to the panel's login. */
 export async function requestPasswordReset(email: string): Promise<void> {
-  if (!isFirebaseEnabled) return;
   await sendPasswordResetEmail(firebaseAuth(), email, { url: `${window.location.origin}/ingresar` });
 }

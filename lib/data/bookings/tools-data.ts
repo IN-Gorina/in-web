@@ -1,5 +1,7 @@
 import "server-only";
 
+import { connection } from "next/server";
+
 import type { BookingToolsData } from "@/components/bookings/booking-tools";
 import { can } from "@/lib/auth/permissions";
 import { addDays, dayKey, now } from "@/lib/dates";
@@ -15,6 +17,8 @@ import { listBookings } from "./service";
  * extra bookings the page shows, so the drawer and the cobro modal can find them.
  */
 export async function getBookingToolsData(extra: Booking[] = []): Promise<BookingToolsData> {
+  // Real data, as of this request.
+  await connection();
   const today = dayKey(now());
   const [staff, courts, members, pricing, upcoming] = await Promise.all([
     getCurrentStaff(),

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { connection } from "next/server";
 import { Suspense } from "react";
 
 import { PageSkeleton } from "@/components/shell/page-skeleton";
@@ -24,6 +25,7 @@ export default function ModeracionPage() {
 }
 
 async function ModeracionContent() {
+  await connection();
   const [reports, staff] = await Promise.all([listReports(), getCurrentStaff()]);
 
   // What "Bloquear socio" needs about each author: whether they're blocked already and how many

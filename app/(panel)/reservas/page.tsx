@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { connection } from "next/server";
 import { Suspense } from "react";
 
 import { BookingToolsProvider } from "@/components/bookings/booking-tools";
@@ -36,6 +37,7 @@ export default function ReservasPage({ searchParams }: PageProps<"/reservas">) {
 }
 
 async function Reservas({ searchParams }: Pick<PageProps<"/reservas">, "searchParams">) {
+  await connection();
   const params = await searchParams;
   const today = dayKey(now());
   const monthStart = `${today.slice(0, 8)}01`;

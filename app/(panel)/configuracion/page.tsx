@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { connection } from "next/server";
 import { Suspense } from "react";
 
 import { PageSkeleton } from "@/components/shell/page-skeleton";
@@ -26,6 +27,7 @@ export default function ConfiguracionPage() {
 }
 
 async function ConfiguracionContent() {
+  await connection();
   const staff = await getCurrentStaff();
   if (!can(staff.role, "club.configurar")) {
     return (

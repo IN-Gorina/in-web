@@ -7,10 +7,8 @@ import { cache } from "react";
 
 import type { StaffRole } from "@/lib/auth/permissions";
 import { adminAuth } from "@/lib/firebase/admin";
-import { isFirebaseEnabled, SESSION_COOKIE } from "@/lib/firebase/config";
+import { SESSION_COOKIE } from "@/lib/firebase/config";
 
-import { mockResponse } from "../backend";
-import { db } from "../mock/store";
 import { roleOf } from "../staff/firebase";
 import type { StaffMember } from "../types";
 
@@ -45,19 +43,8 @@ export const getSignedInAccount = cache(async (): Promise<SignedInAccount | null
 /**
  * The staff member using the panel. Every page and server action goes through here.
  * No session → /ingresar; signed in without a staff role (a member of the app) → /sin-acceso.
- *
- * Without Firebase config it is a fixed mock user: Marcela (Recepción) by default, or Javier
- * (Administrador) with MOCK_STAFF_ROLE=admin in .env.local.
  */
 export const getCurrentStaff = cache(async (): Promise<StaffMember> => {
-  if (!isFirebaseEnabled) {
-    // Read the request anyway, so pages render per request in both modes.
-    await cookies();
-    const role: StaffRole = process.env.MOCK_STAFF_ROLE === "admin" ? "admin" : "recepcion";
-    const id = role === "admin" ? "staff-javier" : "staff-marcela";
-    return mockResponse(db().staff.find((staff) => staff.id === id)!);
-  }
-
   const account = await getSignedInAccount();
   if (!account) redirect("/ingresar");
   if (!account.role) redirect("/sin-acceso");

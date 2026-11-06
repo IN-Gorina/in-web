@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-import { isFirebaseEnabled, SESSION_COOKIE } from "@/lib/firebase/config";
+import { SESSION_COOKIE } from "@/lib/firebase/config";
 
 /**
  * Optimistic check only: without a session cookie, panel pages go straight to /ingresar instead
@@ -8,7 +8,7 @@ import { isFirebaseEnabled, SESSION_COOKIE } from "@/lib/firebase/config";
  * getCurrentStaff() on every page and server action.
  */
 export function proxy(request: NextRequest) {
-  if (!isFirebaseEnabled || request.cookies.has(SESSION_COOKIE)) return NextResponse.next();
+  if (request.cookies.has(SESSION_COOKIE)) return NextResponse.next();
   const login = new URL("/ingresar", request.url);
   const { pathname, search } = request.nextUrl;
   if (pathname !== "/") login.searchParams.set("next", pathname + search);

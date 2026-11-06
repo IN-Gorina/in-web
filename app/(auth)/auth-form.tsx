@@ -15,7 +15,6 @@ import { Icon } from "@/components/ui/icon";
 import { localPath } from "@/lib/auth/redirect";
 import { cn } from "@/lib/cn";
 import { endSession, firebaseAuth, requestPasswordReset, signInWithGoogle, startSession } from "@/lib/firebase/client";
-import { isFirebaseEnabled } from "@/lib/firebase/config";
 import { authMessage, errorCode, isCancelled } from "@/lib/firebase/errors";
 
 /*
@@ -101,7 +100,6 @@ function Divider() {
 // ── 00a Ingresar ──────────────────────────────────────────────────────
 
 export function LoginForm() {
-  const router = useRouter();
   const enterPanel = useEnterPanel();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -116,7 +114,6 @@ export function LoginForm() {
     setErrors(next);
     if (Object.keys(next).length) return;
     setPending(true);
-    if (!isFirebaseEnabled) return router.push("/");
     try {
       const { user } = await signInWithEmailAndPassword(firebaseAuth(), email.trim(), password);
       await enterPanel(user);
@@ -127,7 +124,6 @@ export function LoginForm() {
   };
 
   const google = async () => {
-    if (!isFirebaseEnabled) return router.push("/");
     setErrors({});
     setPending(true);
     try {
@@ -257,7 +253,6 @@ export function CheckEmail({ email }: { email: string }) {
 // ── 00d Aceptar invitación ────────────────────────────────────────────
 
 export function AcceptInvite({ invite }: { invite: { token: string; email: string; invitedBy: string; role: string; expires: string } | null }) {
-  const router = useRouter();
   const enterPanel = useEnterPanel();
   const [password, setPassword] = useState("");
   const [submitted, setSubmitted] = useState(false);
@@ -281,7 +276,6 @@ export function AcceptInvite({ invite }: { invite: { token: string; email: strin
     event.preventDefault();
     setSubmitted(true);
     if (!longEnough || !hasNumber) return;
-    if (!isFirebaseEnabled) return router.push("/");
     setPending(true);
     setFormError(undefined);
     try {
@@ -302,7 +296,6 @@ export function AcceptInvite({ invite }: { invite: { token: string; email: strin
 
   /** Accepting with Google works when it's the Google account of the invited email (same Firebase user). */
   const google = async () => {
-    if (!isFirebaseEnabled) return router.push("/");
     setPending(true);
     setFormError(undefined);
     try {

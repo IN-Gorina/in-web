@@ -1,12 +1,10 @@
 import { acceptInvite } from "@/lib/data/staff/firebase";
-import { isFirebaseEnabled } from "@/lib/firebase/config";
 
 /**
  * Accepting an invitation: the token from the link proves who it is for, so this sets that
  * user's password. The browser then signs in with it and opens the session as usual.
  */
 export async function POST(request: Request) {
-  if (!isFirebaseEnabled) return Response.json({ error: "Firebase no está configurado." }, { status: 404 });
   const site = request.headers.get("sec-fetch-site");
   if (site && site !== "same-origin") return Response.json({ error: "Pedido no permitido." }, { status: 403 });
 

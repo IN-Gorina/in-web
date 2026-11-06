@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { connection } from "next/server";
 import { Suspense } from "react";
 
 import { PageSkeleton } from "@/components/shell/page-skeleton";
@@ -24,6 +25,7 @@ export default function PagosPage() {
 }
 
 async function PagosContent() {
+  await connection();
   const [payments, totals, tools] = await Promise.all([listPayments(), getPaymentTotals(), getBookingToolsData()]);
   const month = monthName(now());
 

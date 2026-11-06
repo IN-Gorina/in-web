@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { connection } from "next/server";
 import { Suspense } from "react";
 
 import { PageSkeleton } from "@/components/shell/page-skeleton";
@@ -6,7 +7,6 @@ import { PageHeader } from "@/components/ui/page-header";
 import { getClubSettings, getCourts } from "@/lib/data/club/service";
 import { listEvents } from "@/lib/data/events/service";
 import { listMembers } from "@/lib/data/members/service";
-import { getAudienceSizes } from "@/lib/data/notifications/service";
 import { dayKey, now } from "@/lib/dates";
 
 import { EventsView, NewEventButton } from "./events-view";
@@ -23,7 +23,8 @@ export default function EventosPage() {
 }
 
 async function EventosContent() {
-  const [events, courts, members, audience, club] = await Promise.all([listEvents(), getCourts(), listMembers(), getAudienceSizes(), getClubSettings()]);
+  await connection();
+  const [events, courts, members, club] = await Promise.all([listEvents(), getCourts(), listMembers(), getClubSettings()]);
   const memberOptions = members.map((m) => ({
     id: m.id,
     name: m.name,
@@ -32,7 +33,7 @@ async function EventosContent() {
     email: m.email,
     blocked: m.status === "bloqueado",
   }));
-  const context = { courts, members: memberOptions, today: dayKey(now()), pushAudience: audience.todosActivas, club: { address: club.address } };
+  const context = { courts, members: memberOptions, today: dayKey(now()), pushAudience: members.filter((member) => member.notificationsOn).length, club: { address: club.address } };
 
   return (
     <EventsView events={events} context={context}>

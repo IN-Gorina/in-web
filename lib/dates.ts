@@ -1,12 +1,11 @@
-import { MOCK_NOW } from "./data/backend";
 import type { Weekday } from "./data/types";
 
 /** Club time zone. Every date in the panel is shown in Argentina time. */
 export const TIME_ZONE = "America/Argentina/Buenos_Aires";
 
-/** "Now" for the panel. Fixed while the backend is mocked so screens match the designs. */
+/** "Now" for the panel. */
 export function now(): Date {
-  return new Date(MOCK_NOW);
+  return new Date();
 }
 
 /** ISO string in club time ("2026-10-08T18:10:00-03:00"), so stored dates sort correctly as text. */

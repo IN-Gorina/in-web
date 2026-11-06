@@ -7,7 +7,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { Card, CardTitle } from "@/components/ui/card";
-import { ChoiceCard } from "@/components/ui/choice";
 import { ConfirmDialog, Modal } from "@/components/ui/dialog";
 import { Field, TextInput } from "@/components/ui/field";
 import { Icon } from "@/components/ui/icon";
@@ -15,8 +14,8 @@ import { Menu, type MenuEntry } from "@/components/ui/menu";
 import { PageHeader } from "@/components/ui/page-header";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
-import { can, roleLabels, staffRoles, type Permission, type StaffRole } from "@/lib/auth/permissions";
-import { changeStaffRole, inviteStaff, resendInvite, sendPasswordReset, setStaffAccess } from "@/lib/data/staff/actions";
+import { can, roleLabels, type Permission, type StaffRole } from "@/lib/auth/permissions";
+import { inviteStaff, resendInvite, sendPasswordReset, setStaffAccess } from "@/lib/data/staff/actions";
 import type { StaffMember } from "@/lib/data/types";
 import { ago, relativeDateTime } from "@/lib/dates";
 import { requestPasswordReset } from "@/lib/firebase/client";
@@ -24,11 +23,9 @@ import { requestPasswordReset } from "@/lib/firebase/client";
 const matrix: { label: string; permission: Permission }[] = [
   { label: "Ver agenda y reservas", permission: "agenda.ver" },
   { label: "Crear y cancelar reservas", permission: "reservas.gestionar" },
-  { label: "Registrar cobro del saldo", permission: "cobros.registrar" },
   { label: "Aprobar turnos fijos", permission: "turnosFijos.aprobar" },
   { label: "Moderar el portal", permission: "portal.moderar" },
   { label: "Bloquear socios", permission: "socios.bloquear" },
-  { label: "Enviar notificaciones", permission: "notificaciones.enviar" },
   { label: "Devolver señas", permission: "senas.devolver" },
   { label: "Canchas, tarifas y horarios", permission: "club.configurar" },
   { label: "Staff y permisos", permission: "staff.gestionar" },
@@ -50,15 +47,7 @@ export function StaffView({ title, subtitle, staff, meId }: { title: string; sub
     });
 
   const menu = (person: StaffMember): MenuEntry[] => {
-    const items: MenuEntry[] = [
-      { type: "header", label: <span className="text-micro font-bold uppercase tracking-eyebrow text-ink-muted">Rol</span> },
-      ...staffRoles.map((role) => ({
-        label: roleLabels[role],
-        checked: person.role === role,
-        onSelect: () => person.role !== role && run(() => changeStaffRole({ id: person.id, role }), `${person.name.split(" ")[0]} ahora es ${roleLabels[role]}`),
-      })),
-      { type: "separator" },
-    ];
+    const items: MenuEntry[] = [];
     if (person.status === "invitado")
       items.push({
         label: "Nuevo link de invitación",
@@ -130,7 +119,7 @@ export function StaffView({ title, subtitle, staff, meId }: { title: string; sub
                     </span>
                   </span>
                   <span className="w-[118px]">
-                    <Badge tone={person.role === "admin" ? "dark" : "info"}>{roleLabels[person.role]}</Badge>
+                    <Badge tone={person.role === "superadmin" ? "dark" : "info"}>{roleLabels[person.role]}</Badge>
                   </span>
                   <span className="w-[96px] text-body-sm font-semibold text-ink">
                     {person.status === "invitado" ? "—" : person.lastSeen ? (ago(person.lastSeen) === "Hoy" ? relativeDateTime(person.lastSeen).replace(" · ", " ") : ago(person.lastSeen)) : "—"}
@@ -141,7 +130,7 @@ export function StaffView({ title, subtitle, staff, meId }: { title: string; sub
                     {person.status === "sin-acceso" && <span className="text-body-sm font-bold text-danger">Sin acceso</span>}
                   </span>
                   <span className="w-7">
-                    {!me && (
+                    {!me && person.role !== "superadmin" && (
                       <Menu
                         items={menu(person)}
                         trigger={(props) => (
@@ -172,18 +161,18 @@ export function StaffView({ title, subtitle, staff, meId }: { title: string; sub
         <Card className="flex w-[400px] shrink-0 flex-col gap-3 p-[22px]">
           <div className="flex flex-col gap-1">
             <CardTitle title="Permisos por rol" />
-            <p className="text-body-sm font-medium text-ink-muted">Fijos en esta versión. Solo un administrador cambia roles.</p>
+            <p className="text-body-sm font-medium text-ink-muted">Hay un solo superadministrador; todos los que se invitan son administradores.</p>
           </div>
           <div role="table" aria-label="Permisos por rol" className="flex flex-col">
             <div role="row" className="flex h-9 items-center rounded-md bg-surface-muted px-3 text-caption font-bold text-ink-muted">
               <span role="columnheader" className="flex-1 uppercase tracking-label">
                 Puede
               </span>
-              <span role="columnheader" className="w-[84px] text-center">
-                Recepción
-              </span>
               <span role="columnheader" className="w-[60px] text-center">
                 Admin
+              </span>
+              <span role="columnheader" className="w-[84px] text-center">
+                Superadmin
               </span>
             </div>
             {matrix.map((row) => (
@@ -191,8 +180,8 @@ export function StaffView({ title, subtitle, staff, meId }: { title: string; sub
                 <span role="cell" className="flex-1 text-body-sm font-semibold text-ink">
                   {row.label}
                 </span>
-                {(["recepcion", "admin"] as StaffRole[]).map((role) => (
-                  <span key={role} role="cell" className={cn("flex justify-center", role === "recepcion" ? "w-[84px]" : "w-[60px]")}>
+                {(["admin", "superadmin"] as StaffRole[]).map((role) => (
+                  <span key={role} role="cell" className={cn("flex justify-center", role === "superadmin" ? "w-[84px]" : "w-[60px]")}>
                     {can(role, row.permission) ? (
                       <Icon name="check" size={16} strokeWidth={2.6} className="text-success" label="Sí" />
                     ) : (
@@ -242,12 +231,11 @@ function InviteModal({ onClose, onLink }: { onClose: () => void; onLink: (email:
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState<StaffRole>("recepcion");
 
   const submit = () =>
     startTransition(async () => {
       setError(null);
-      const result = await inviteStaff({ name, email, role });
+      const result = await inviteStaff({ name, email });
       if (!result.ok) return setError(result.error);
       if (result.data.link) return onLink(email.trim(), result.data.link);
       // Mock mode, or the person already had an account (e.g. from the app): no link to share.
@@ -282,24 +270,9 @@ function InviteModal({ onClose, onLink }: { onClose: () => void; onLink: (email:
           <TextInput type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="nombre@ingorina.com.ar" />
         </Field>
       </div>
-      <Field label="Rol">
-        <div className="flex flex-col gap-2">
-          <ChoiceCard
-            indicator="radio"
-            title="Recepción"
-            description="Agenda, reservas, cobros, turnos fijos y moderación"
-            selected={role === "recepcion"}
-            onSelect={() => setRole("recepcion")}
-          />
-          <ChoiceCard
-            indicator="radio"
-            title="Administrador"
-            description="Todo lo anterior, más tarifas, devoluciones, notificaciones y staff"
-            selected={role === "admin"}
-            onSelect={() => setRole("admin")}
-          />
-        </div>
-      </Field>
+      <Callout tone="neutral" icon="shield">
+        Entra como administrador: turnos, canchas, socios y moderación. Staff y permisos queda para el superadministrador.
+      </Callout>
       <Callout tone="neutral" icon="clock">
         El link vence en 7 días y sirve una sola vez. Si se vence, generá uno nuevo desde la lista.
       </Callout>
