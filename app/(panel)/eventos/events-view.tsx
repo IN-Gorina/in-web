@@ -7,7 +7,6 @@ import { MemberPicker, type MemberOption } from "@/components/members/member-pic
 import { Avatar } from "@/components/ui/avatar";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Callout } from "@/components/ui/callout";
 import { Eyebrow } from "@/components/ui/card";
 import { Segmented, Switch, TileGroup } from "@/components/ui/choice";
 import { ConfirmDialog, Drawer, DrawerClose, Modal } from "@/components/ui/dialog";
@@ -240,15 +239,12 @@ function EventFormModal({ event, context, onClose }: { event?: ClubEvent; contex
   const [tried, setTried] = useState(false);
   const scheduleIssue = notify && !sent && when === "programar" ? scheduleError(scheduleDay, scheduleTime, day && to ? toIso(day, to) : null) : null;
   const whenIssue = timeError(day, from, to, published || tried);
+  const footerError = error ?? (tried ? (whenIssue ?? scheduleIssue) : null);
 
   const submit = (publish: boolean) => {
     setError(null);
     setTried(true);
-    const issue = timeError(day, from, to, true) ?? scheduleIssue;
-    if (issue) {
-      toast(issue, "error");
-      return;
-    }
+    if (timeError(day, from, to, true) ?? scheduleIssue) return; // shown next to the fields and in the footer
     startTransition(async () => {
       const result = await saveEvent({
         id: event?.id,
@@ -265,10 +261,7 @@ function EventFormModal({ event, context, onClose }: { event?: ClubEvent; contex
         notification: notify && !sent ? { title: shownTitle, body: shownBody, schedule: when === "programar" ? { day: scheduleDay, time: scheduleTime } : null } : null,
         publish,
       });
-      if (!result.ok) {
-        toast(result.error, "error");
-        return setError(result.error);
-      }
+      if (!result.ok) return setError(result.error);
       const sentAt = result.data.notification;
       toast(
         !publish
@@ -301,7 +294,15 @@ function EventFormModal({ event, context, onClose }: { event?: ClubEvent; contex
       }
       footer={
         <>
-            <span className="flex-1 text-body-sm font-medium text-ink-muted">{dirty ? "Sin guardar" : event?.editedAt ? `Guardado ${hoursAgo(event.editedAt)}` : ""}</span>
+            {/* The form is a native <dialog> (top layer): toasts stay behind it, so errors show here. */}
+            {footerError ? (
+              <span role="alert" className="flex flex-1 items-center gap-1.5 text-body-sm font-semibold text-danger">
+                <Icon name="alert" size={16} className="shrink-0" />
+                {footerError}
+              </span>
+            ) : (
+              <span className="flex-1 text-body-sm font-medium text-ink-muted">{dirty ? "Sin guardar" : event?.editedAt ? `Guardado ${hoursAgo(event.editedAt)}` : ""}</span>
+            )}
             {!published && (
               <Button variant="secondary" size="lg" onClick={() => submit(false)} disabled={pending}>
                 Guardar borrador
@@ -349,9 +350,9 @@ function EventFormModal({ event, context, onClose }: { event?: ClubEvent; contex
           <TextField label="Fecha" type="date" min={context.today} value={day} onChange={(e) => setDay(e.target.value)} className="flex-1" invalid={Boolean(whenIssue) && !day} />
           <Field label="Horario" className="flex-1" error={whenIssue ?? undefined}>
             <div className="flex items-center gap-2">
-              <TextInput aria-label="Hora de inicio" type="time" value={from} onChange={(e) => setFrom(e.target.value)} className="flex-1" />
+              <Select variant="field" label="Hora de inicio" placeholder="Desde" value={from || null} onChange={setFrom} options={timeOptions} className="flex-1" />
               <span className="text-ink-muted">–</span>
-              <TextInput aria-label="Hora de fin" type="time" value={to} onChange={(e) => setTo(e.target.value)} className="flex-1" />
+              <Select variant="field" label="Hora de fin" placeholder="Hasta" value={to || null} onChange={setTo} options={timeOptions.filter((t) => !from || t.value > from)} className="flex-1" />
             </div>
           </Field>
         </div>
@@ -424,7 +425,7 @@ function EventFormModal({ event, context, onClose }: { event?: ClubEvent; contex
                   {when === "programar" && (
                     <div className="flex items-center gap-2">
                       <TextInput type="date" aria-label="Día del aviso" min={context.today} max={day || undefined} value={scheduleDay} onChange={(e) => setScheduleDay(e.target.value)} className="flex-1" />
-                      <TextInput type="time" aria-label="Hora del aviso" value={scheduleTime} onChange={(e) => setScheduleTime(e.target.value)} className="w-[130px]" />
+                      <Select variant="field" label="Hora del aviso" value={scheduleTime} onChange={setScheduleTime} options={timeOptions} width={130} />
                     </div>
                   )}
                 </Field>
@@ -437,10 +438,17 @@ function EventFormModal({ event, context, onClose }: { event?: ClubEvent; contex
         </div>
         </>
       )}
-      {error && <Callout tone="danger">{error}</Callout>}
     </Modal>
   );
 }
+
+/** Every half hour, 07:00 to 23:30: a list instead of <input type="time">, which in a 12-hour
+ * system locale stays empty until AM/PM is picked. */
+const timeOptions = Array.from({ length: 34 }, (_, i) => {
+  const minutes = 7 * 60 + i * 30;
+  const value = `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${minutes % 60 ? "30" : "00"}`;
+  return { value, label: value };
+});
 
 /** The event's date and times: missing (only once the user tried to save), reversed or already past. */
 function timeError(day: string, from: string, to: string, requireAll: boolean): string | null {
