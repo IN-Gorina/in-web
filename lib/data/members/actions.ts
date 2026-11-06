@@ -6,7 +6,8 @@ import { runAction, type ActionResult } from "@/lib/auth/guard";
 import { audit } from "@/lib/db/outbox";
 import { adminAuth } from "@/lib/firebase/admin";
 
-import type { Category, PlayingSide } from "../types";
+import { sexToDb } from "../events/audience";
+import type { Category, PlayingSide, Sex } from "../types";
 import { categories } from "../types";
 import { lockUser, NOT_AVAILABLE, suspendMember, withTx } from "../writes";
 
@@ -48,6 +49,21 @@ export async function updateMemberCategory(input: { id: string; category: Catego
         where id = ${input.id} and deleted_at is null returning id`;
       if (!user) throw new Error("No encontramos ese socio.");
       await audit(tx, staff, "member.category_set", { type: "user", id: input.id }, { category: input.category });
+      refresh();
+      return undefined;
+    });
+  });
+}
+
+/** The club sets the member's sex (for women's or men's events); the member can change it in the app. */
+export async function updateMemberSex(input: { id: string; sex: Sex }): Promise<ActionResult> {
+  return runAction("reservas.gestionar", (staff) => {
+    const value = sexToDb(input.sex);
+    if (!value) throw new Error("Elegí el sexo.");
+    return withTx(async (tx) => {
+      const [user] = await tx`update app.users set sex = ${value}::app.user_sex where id = ${input.id} and deleted_at is null returning id`;
+      if (!user) throw new Error("No encontramos ese socio.");
+      await audit(tx, staff, "member.sex_set", { type: "user", id: input.id }, { sex: input.sex });
       refresh();
       return undefined;
     });

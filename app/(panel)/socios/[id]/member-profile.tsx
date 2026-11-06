@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useTransition } from "react";
+import { Fragment, useState, useTransition } from "react";
 
 import { useBookingTools } from "@/components/bookings/booking-tools";
 import { BlockMemberDialog, UnblockMemberDialog } from "@/components/members/block-dialog";
@@ -16,9 +16,10 @@ import { Icon } from "@/components/ui/icon";
 import { EmptyState } from "@/components/ui/states";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
-import { saveInternalNote } from "@/lib/data/members/actions";
+import { sexLabels } from "@/lib/data/events/audience";
+import { saveInternalNote, updateMemberSex } from "@/lib/data/members/actions";
 import { memberStatus, sideLabels } from "@/lib/data/members/presentation";
-import type { Member } from "@/lib/data/types";
+import type { Member, Sex } from "@/lib/data/types";
 import { dayMonth, monthYear, relativeDateTime } from "@/lib/dates";
 import { formatMoney } from "@/lib/format";
 
@@ -187,18 +188,21 @@ export function MemberProfile({ member, rows, canBlock }: { member: Member; rows
                 member.category ? `${member.category} · ${member.categoryChosenBy === "club" ? "corregida por el club" : "elegida por el socio"}` : "Sin categoría",
               ],
               ["Notificaciones", member.notificationsOn ? "Activas" : "Apagadas"],
-            ].map(([label, value]) => (
-              <div key={label} className="flex h-10 items-center justify-between gap-4 border-t border-line">
-                <span className="text-body-sm font-medium text-ink-muted">{label}</span>
-                <span
-                  className={cn(
-                    "truncate text-body-sm font-bold",
-                    label === "Notificaciones" ? (member.notificationsOn ? "text-success" : "text-ink-muted") : "text-ink",
-                  )}
-                >
-                  {value}
-                </span>
-              </div>
+            ].map(([label, value], index) => (
+              <Fragment key={label}>
+                {index === 4 && <SexRow member={member} />}
+                <div className="flex h-10 items-center justify-between gap-4 border-t border-line">
+                  <span className="text-body-sm font-medium text-ink-muted">{label}</span>
+                  <span
+                    className={cn(
+                      "truncate text-body-sm font-bold",
+                      label === "Notificaciones" ? (member.notificationsOn ? "text-success" : "text-ink-muted") : "text-ink",
+                    )}
+                  >
+                    {value}
+                  </span>
+                </div>
+              </Fragment>
             ))}
           </Card>
           <InternalNote member={member} />
@@ -210,6 +214,40 @@ export function MemberProfile({ member, rows, canBlock }: { member: Member; rows
       )}
       {unblocking && <UnblockMemberDialog member={member} onClose={() => setUnblocking(false)} />}
     </>
+  );
+}
+
+/** For women's or men's events. The member sets it in the app; the club can set or fix it here. */
+function SexRow({ member }: { member: Member }) {
+  const toast = useToast();
+  const [pending, startTransition] = useTransition();
+  const choose = (sex: Sex) =>
+    startTransition(async () => {
+      const result = await updateMemberSex({ id: member.id, sex });
+      toast(result.ok ? `Sexo: ${sexLabels[sex].toLowerCase()}` : result.error, result.ok ? "success" : "error");
+    });
+  return (
+    <div className="flex h-10 items-center justify-between gap-4 border-t border-line">
+      <span className="text-body-sm font-medium text-ink-muted">Sexo</span>
+      <span role="radiogroup" aria-label="Sexo" className="flex gap-1">
+        {(Object.keys(sexLabels) as Sex[]).map((sex) => (
+          <button
+            key={sex}
+            type="button"
+            role="radio"
+            aria-checked={member.sex === sex}
+            disabled={pending}
+            onClick={() => member.sex !== sex && choose(sex)}
+            className={cn(
+              "h-7 rounded-full px-2.5 text-caption font-bold transition-colors disabled:opacity-60",
+              member.sex === sex ? "bg-elite-blue text-white" : "text-ink-muted hover:bg-field hover:text-ink",
+            )}
+          >
+            {sexLabels[sex]}
+          </button>
+        ))}
+      </span>
+    </div>
   );
 }
 

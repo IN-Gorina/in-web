@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { createContext, useContext, useMemo, useState, useTransition, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useState, useTransition, type ReactNode } from "react";
 
 import { MemberPicker, type MemberOption } from "@/components/members/member-picker";
 import { Avatar } from "@/components/ui/avatar";
@@ -9,7 +9,7 @@ import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { Eyebrow } from "@/components/ui/card";
-import { Segmented, SwitchRow } from "@/components/ui/choice";
+import { Segmented, Switch, TileGroup } from "@/components/ui/choice";
 import { ConfirmDialog, Drawer, DrawerClose, Modal } from "@/components/ui/dialog";
 import { Field, SearchInput, TextArea, TextField, TextInput } from "@/components/ui/field";
 import { Icon } from "@/components/ui/icon";
@@ -18,8 +18,9 @@ import { EmptyState } from "@/components/ui/states";
 import { Table, TableBody, TableCell, TableFooter, TableHeader, TableHeaderCell, TableRow } from "@/components/ui/table";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
-import { cancelEvent, notifyAttendees, registerAttendee, saveEvent } from "@/lib/data/events/actions";
-import type { ClubEvent, Court } from "@/lib/data/types";
+import { cancelEvent, previewAudience, registerAttendee, saveEvent } from "@/lib/data/events/actions";
+import { audienceLabel, sexLabels } from "@/lib/data/events/audience";
+import { categories, type ClubEvent, type Court, type EventAudience } from "@/lib/data/types";
 import { dayKey, hoursAgo, longDate, shortDate, time, toIso } from "@/lib/dates";
 import { formatCount, formatMoney } from "@/lib/format";
 
@@ -27,7 +28,6 @@ type Context = {
   courts: Court[];
   members: MemberOption[];
   today: string;
-  pushAudience: number;
   club: { address: string };
 };
 type Tab = "proximos" | "borradores" | "pasados";
@@ -56,6 +56,15 @@ function statusBadge(event: ClubEvent): { label: string; tone: BadgeTone } {
     case "pasado":
       return { label: "Terminado", tone: "neutral" };
   }
+}
+
+/** "Aviso enviado el …", "Aviso programado para el …", "Sin aviso". */
+function notificationStatus(event: ClubEvent) {
+  const notification = event.notification;
+  if (!notification) return "Sin aviso";
+  if (notification.sentAt) return `Aviso enviado el ${shortDate(notification.sentAt).toLowerCase()} a las ${time(notification.sentAt)}`;
+  if (!notification.at) return "El aviso sale al publicar";
+  return `Aviso programado: ${shortDate(notification.at).toLowerCase()} a las ${time(notification.at)}`;
 }
 
 function whenLabel(event: ClubEvent) {
@@ -130,7 +139,7 @@ export function EventsView({ events, context, children }: { events: ClubEvent[];
                       <span className="flex min-w-0 flex-col gap-1">
                         <span className="truncate text-body font-semibold text-ink">{event.title}</span>
                         <span className="truncate text-body-sm font-medium text-ink-muted">
-                          {event.type} · {whenLabel(event)}
+                          {event.type} · {whenLabel(event)} · para {audienceLabel(event.audience)}
                         </span>
                       </span>
                     </span>
@@ -192,6 +201,9 @@ function EventThumb({ event, className }: { event: ClubEvent; className?: string
 
 // ── Nuevo / editar evento (Paper "Panel / 08b") ───────────────────────
 
+/** First sentence of the description: what the app shows in the list and the notification's default text. */
+const firstSentence = (text: string) => text.trim().split(/(?<=[.!?])\s/)[0] ?? "";
+
 function EventFormModal({ event, context, onClose }: { event?: ClubEvent; context: Context; onClose: () => void }) {
   const toast = useToast();
   const [pending, startTransition] = useTransition();
@@ -205,19 +217,24 @@ function EventFormModal({ event, context, onClose }: { event?: ClubEvent; contex
   const [price, setPrice] = useState(event ? String(event.pricePerPerson) : "");
   const [courtIds, setCourtIds] = useState<string[]>(event?.courtIds ?? []);
   const [description, setDescription] = useState(event?.description ?? "");
-  const [image, setImage] = useState<string | undefined>(event?.image);
-  const [blockCourts, setBlockCourts] = useState(event?.blockCourts ?? true);
-  const [notify, setNotify] = useState(event?.status !== "publicado");
+  const [audience, setAudience] = useState<EventAudience>(event?.audience ?? { categories: null, sex: null });
+  const sent = event?.notification?.sentAt ?? null;
+  const [notify, setNotify] = useState(event ? event.notification !== null : true);
+  // Until edited, the notification follows the event's title and first sentence.
+  const [notifyTitle, setNotifyTitle] = useState<string | null>(event?.notification?.title ?? null);
+  const [notifyBody, setNotifyBody] = useState<string | null>(event?.notification?.body ?? null);
+  const [when, setWhen] = useState<"publicar" | "programar">(
+    event?.notification?.at && !sent && new Date(event.notification.at) > new Date() ? "programar" : "publicar",
+  );
+  const [scheduleDay, setScheduleDay] = useState(event?.notification?.at ? dayKey(event.notification.at) : context.today);
+  const [scheduleTime, setScheduleTime] = useState(event?.notification?.at ? time(event.notification.at) : "09:00");
   const [previewing, setPreviewing] = useState(false);
   const dirty = title !== (event?.title ?? "") || description !== (event?.description ?? "");
+  const published = event?.status === "publicado";
 
-  const onPhoto = (file: File | undefined) => {
-    if (!file) return;
-    if (file.size > 3_000_000) return setError("La foto puede pesar hasta 3 MB.");
-    const reader = new FileReader();
-    reader.onload = () => setImage(String(reader.result));
-    reader.readAsDataURL(file);
-  };
+  const shownTitle = (notifyTitle ?? title).slice(0, 60);
+  const shownBody = (notifyBody ?? firstSentence(description)).slice(0, 140);
+  const reach = useAudienceSize(audience);
 
   const submit = (publish: boolean) => {
     setError(null);
@@ -233,13 +250,21 @@ function EventFormModal({ event, context, onClose }: { event?: ClubEvent; contex
         pricePerPerson: Number(price.replace(/\D/g, "") || 0),
         courtIds,
         description,
-        image,
-        blockCourts,
-        notifyMembers: notify,
+        audience,
+        notification: notify && !sent ? { title: shownTitle, body: shownBody, schedule: when === "programar" ? { day: scheduleDay, time: scheduleTime } : null } : null,
         publish,
       });
       if (!result.ok) return setError(result.error);
-      toast(publish ? (result.data.notified ? `Evento publicado · avisamos a ${formatCount(result.data.notified)} socios` : "Evento publicado") : "Borrador guardado");
+      const sentAt = result.data.notification;
+      toast(
+        !publish
+          ? "Borrador guardado"
+          : !sentAt
+            ? published ? "Cambios guardados" : "Evento publicado"
+            : new Date(sentAt.at).getTime() - Date.now() < 120_000
+              ? `${published ? "Cambios guardados" : "Evento publicado"} · el aviso sale en un minuto a ${formatCount(sentAt.withPush)} socios`
+              : `${published ? "Cambios guardados" : "Evento publicado"} · aviso programado para el ${shortDate(sentAt.at).toLowerCase()} a las ${time(sentAt.at)}`,
+      );
       onClose();
     });
   };
@@ -248,7 +273,7 @@ function EventFormModal({ event, context, onClose }: { event?: ClubEvent; contex
     <Modal
       open
       onClose={onClose}
-      width={680}
+      width={760}
       title={event ? "Editar evento" : "Nuevo evento"}
       headerAside={
         <button
@@ -263,56 +288,47 @@ function EventFormModal({ event, context, onClose }: { event?: ClubEvent; contex
       footer={
         <>
             <span className="flex-1 text-body-sm font-medium text-ink-muted">{dirty ? "Sin guardar" : event?.editedAt ? `Guardado ${hoursAgo(event.editedAt)}` : ""}</span>
-            {event?.status !== "publicado" && (
+            {!published && (
               <Button variant="secondary" size="lg" onClick={() => submit(false)} disabled={pending}>
                 Guardar borrador
               </Button>
             )}
             <Button size="lg" onClick={() => submit(true)} disabled={pending}>
-              {event?.status === "publicado" ? "Guardar cambios" : "Publicar"}
+              {published ? "Guardar cambios" : "Publicar"}
             </Button>
         </>
       }
     >
       {previewing ? (
-        <EventPreview
-          context={context}
-          draft={{
-            title,
-            type,
-            image,
-            description,
-            start: day && from ? toIso(day, from) : undefined,
-            from,
-            to,
-            price: Number(price.replace(/\D/g, "") || 0),
-            courts: context.courts.filter((c) => courtIds.includes(c.id)),
-            capacity: Number(capacity) || 0,
-            registered: event?.registered ?? 0,
-          }}
-        />
+        <div className="flex flex-col gap-4">
+          <EventPreview
+            context={context}
+            draft={{
+              title,
+              type,
+              description,
+              start: day && from ? toIso(day, from) : undefined,
+              from,
+              to,
+              price: Number(price.replace(/\D/g, "") || 0),
+              courts: context.courts.filter((c) => courtIds.includes(c.id)),
+              capacity: Number(capacity) || 0,
+              registered: event?.registered ?? 0,
+              audience: audienceLabel(audience),
+            }}
+          />
+          {notify && <NotificationPreview title={shownTitle} body={shownBody} reach={reach} />}
+        </div>
       ) : (
         <>
-        <div className="flex gap-4">
-          <label className="relative flex h-[136px] w-[150px] shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-md border-[1.5px] border-dashed border-sky bg-surface-muted hover:bg-field">
-            {image ? (
-              // eslint-disable-next-line @next/next/no-img-element -- local preview of an uploaded file
-              <img src={image} alt="Foto del evento" className="absolute inset-0 size-full object-cover" />
-            ) : null}
-            <span className={cn("relative inline-flex items-center gap-1.5 rounded-sm border border-line bg-white px-3 py-1.5 text-body-sm font-semibold text-ink", image && "opacity-90")}>
-              <Icon name="plus" size={14} />
-              {image ? "Cambiar foto" : "Subir foto"}
-            </span>
-            <input type="file" accept="image/*" className="sr-only" onChange={(e) => onPhoto(e.target.files?.[0])} />
-          </label>
-          <div className="flex flex-1 flex-col gap-3">
-            <TextField label="Título" placeholder="Ej: Americano de los jueves" value={title} onChange={(e) => setTitle(e.target.value)} />
-            <div className="flex gap-3">
-              <Field label="Tipo" className="flex-1">
-                <Select variant="field" label="Tipo" placeholder="Elegir" value={type} onChange={setType} options={eventTypes.map((t) => ({ value: t, label: t }))} />
-              </Field>
-              <TextField label="Cupo" inputMode="numeric" placeholder="Ej: 24" value={capacity} onChange={(e) => setCapacity(e.target.value.replace(/\D/g, ""))} className="w-24 shrink-0" />
-            </div>
+        <div className="flex flex-col gap-3">
+          <TextField label="Título" placeholder="Ej: Americano femenino de los jueves" maxLength={80} value={title} onChange={(e) => setTitle(e.target.value)} />
+          <div className="flex gap-3">
+            <Field label="Tipo" className="flex-1">
+              <Select variant="field" label="Tipo" placeholder="Elegir" value={type} onChange={setType} options={eventTypes.map((t) => ({ value: t, label: t }))} />
+            </Field>
+            <TextField label="Cupo" inputMode="numeric" placeholder="Ej: 24" value={capacity} onChange={(e) => setCapacity(e.target.value.replace(/\D/g, ""))} className="w-24 shrink-0" />
+            <TextField label="Precio por persona" inputMode="numeric" placeholder="$ 0 = gratis" value={price} onChange={(e) => setPrice(e.target.value)} className="w-[160px] shrink-0" />
           </div>
         </div>
         <div className="flex gap-3">
@@ -324,7 +340,6 @@ function EventFormModal({ event, context, onClose }: { event?: ClubEvent; contex
               <TextInput aria-label="Hora de fin" type="time" value={to} onChange={(e) => setTo(e.target.value)} className="flex-1" />
             </div>
           </Field>
-          <TextField label="Precio por persona" inputMode="numeric" placeholder="$ 0 = gratis" value={price} onChange={(e) => setPrice(e.target.value)} className="w-[160px] shrink-0" />
         </div>
         <Field label="Lugar">
           <div role="group" aria-label="Canchas" className="flex flex-wrap gap-2">
@@ -349,16 +364,62 @@ function EventFormModal({ event, context, onClose }: { event?: ClubEvent; contex
             maxLength={600}
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            placeholder="Contá de qué se trata, quién puede anotarse y qué incluye."
+            placeholder="Contá de qué se trata y qué incluye. La primera oración es la que se ve en la lista."
           />
         </Field>
-        <div className="flex flex-col overflow-hidden rounded-md border border-line">
-          <div className="border-b border-line [&>div]:rounded-none [&>div]:bg-white">
-            <SwitchRow title="Bloquear canchas en la agenda" description="Las canchas elegidas quedan tomadas en ese horario" checked={blockCourts} onChange={setBlockCourts} />
+
+        <AudienceFields audience={audience} onChange={setAudience} reach={reach} />
+
+        <div className="flex flex-col gap-3 rounded-md border border-line p-4">
+          <div className="flex items-center gap-3">
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <p className="text-label font-bold text-ink">Notificación</p>
+              <p className="text-caption font-medium text-ink-muted">
+                {sent
+                  ? `Ya se envió el ${shortDate(sent).toLowerCase()} a las ${time(sent)}.`
+                  : `Push a los socios de «${audienceLabel(audience)}» con notificaciones activas: ${reach ? formatCount(reach.withPush) : "…"}.`}
+              </p>
+            </div>
+            {!sent && <Switch label="Avisar con una notificación" checked={notify} onChange={setNotify} />}
           </div>
-          <div className="[&>div]:rounded-none [&>div]:bg-white">
-            <SwitchRow title="Avisar a socios al publicar" description={`Push a ${formatCount(context.pushAudience)} socios`} checked={notify} onChange={setNotify} />
-          </div>
+          {notify && !sent && (
+            <div className="flex gap-4">
+              <div className="flex min-w-0 flex-1 flex-col gap-3">
+                <TextField
+                  label="Título"
+                  aside={`${shownTitle.length} / 60`}
+                  maxLength={60}
+                  placeholder="Título del evento"
+                  value={shownTitle}
+                  onChange={(e) => setNotifyTitle(e.target.value)}
+                />
+                <Field label="Mensaje" aside={`${shownBody.length} / 140`}>
+                  <TextArea maxLength={140} rows={3} placeholder="Ej: Anotate desde la app, quedan pocos lugares." value={shownBody} onChange={(e) => setNotifyBody(e.target.value)} />
+                </Field>
+                <Field label="Cuándo sale">
+                  <Segmented
+                    variant="field"
+                    label="Cuándo sale"
+                    value={when}
+                    onChange={setWhen}
+                    options={[
+                      { value: "publicar", label: published ? "Al guardar" : "Al publicar" },
+                      { value: "programar", label: "Programar" },
+                    ]}
+                  />
+                  {when === "programar" && (
+                    <div className="flex items-center gap-2">
+                      <TextInput type="date" aria-label="Día del aviso" min={context.today} max={day || undefined} value={scheduleDay} onChange={(e) => setScheduleDay(e.target.value)} className="flex-1" />
+                      <TextInput type="time" aria-label="Hora del aviso" value={scheduleTime} onChange={(e) => setScheduleTime(e.target.value)} className="w-[130px]" />
+                    </div>
+                  )}
+                </Field>
+              </div>
+              <div className="w-[260px] shrink-0">
+                <NotificationPreview title={shownTitle} body={shownBody} reach={reach} />
+              </div>
+            </div>
+          )}
         </div>
         </>
       )}
@@ -367,12 +428,110 @@ function EventFormModal({ event, context, onClose }: { event?: ClubEvent; contex
   );
 }
 
+type Reach = { members: number; withPush: number } | null;
+
+/** Audience size for the chosen categories and sex, from the database (debounced). */
+function useAudienceSize(audience: EventAudience): Reach {
+  const [reach, setReach] = useState<Reach>(null);
+  const key = `${audience.categories?.join() ?? "todas"}|${audience.sex ?? "todos"}`;
+  useEffect(() => {
+    if (audience.categories?.length === 0) return;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      const result = await previewAudience(audience);
+      if (!cancelled && result.ok) setReach({ members: result.data.members, withPush: result.data.withPush });
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` is the audience's value
+  }, [key]);
+  return audience.categories?.length === 0 ? { members: 0, withPush: 0 } : reach;
+}
+
+/** Who can sign up: categories (all or some) and sex. Everyone sees the event. */
+function AudienceFields({ audience, onChange, reach }: { audience: EventAudience; onChange: (audience: EventAudience) => void; reach: Reach }) {
+  const some = audience.categories !== null;
+  return (
+    <div className="flex flex-col gap-3 rounded-md border border-line p-4">
+      <div className="flex flex-col gap-0.5">
+        <p className="text-label font-bold text-ink">Quiénes pueden anotarse</p>
+        <p className="text-caption font-medium text-ink-muted">
+          Todos ven el evento en la app; solo «{audienceLabel(audience)}» puede anotarse
+          {reach ? ` · ${formatCount(reach.members)} ${reach.members === 1 ? "socio" : "socios"}` : ""}.
+        </p>
+      </div>
+      <div className="flex gap-3">
+        <Field label="Categorías" className="flex-1">
+          <Segmented
+            variant="field"
+            label="Categorías"
+            value={some ? "elegir" : "todas"}
+            onChange={(value) => onChange({ ...audience, categories: value === "todas" ? null : (audience.categories ?? []) })}
+            options={[
+              { value: "todas", label: "Todas" },
+              { value: "elegir", label: "Elegir" },
+            ]}
+          />
+        </Field>
+        <Field label="Sexo" className="flex-1">
+          <Segmented
+            variant="field"
+            label="Sexo"
+            value={audience.sex ?? "todos"}
+            onChange={(value) => onChange({ ...audience, sex: value === "todos" ? null : value })}
+            options={[
+              { value: "todos", label: "Todos" },
+              { value: "femenino", label: sexLabels.femenino },
+              { value: "masculino", label: sexLabels.masculino },
+            ]}
+          />
+        </Field>
+      </div>
+      {some && (
+        <TileGroup
+          display
+          label="Categorías que pueden anotarse"
+          value={audience.categories ?? []}
+          onChange={(category) => {
+            const current = audience.categories ?? [];
+            onChange({ ...audience, categories: current.includes(category) ? current.filter((c) => c !== category) : [...current, category] });
+          }}
+          options={categories.map((c) => ({ value: c, label: c }))}
+        />
+      )}
+      {some && audience.categories?.length === 0 && <p className="text-caption font-semibold text-warning">Elegí al menos una categoría.</p>}
+      {audience.sex && <p className="text-caption font-medium text-ink-muted">Los socios que no cargaron su sexo en la app no pueden anotarse: el club lo puede cargar en su ficha.</p>}
+    </div>
+  );
+}
+
+/** How the push looks on the phone, and who gets it. */
+function NotificationPreview({ title, body, reach }: { title: string; body: string; reach: Reach }) {
+  return (
+    <div className="flex flex-col gap-3 rounded-lg bg-elite-blue p-4">
+      <p className="text-caption font-bold uppercase tracking-overline text-blue-tint">Vista previa en el teléfono</p>
+      <div className="flex gap-3 rounded-md bg-white p-3.5">
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-sm bg-ink font-display text-caption text-energy-lime">IN</span>
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <p className={cn("text-body-sm font-bold", title ? "text-ink" : "text-ink-disabled")}>{title || "Título de la notificación"}</p>
+          <p className={cn("line-clamp-3 text-caption font-medium", body ? "text-ink-muted" : "text-ink-disabled")}>{body || "El mensaje aparece acá, como lo ve el socio."}</p>
+        </div>
+      </div>
+      <p className="text-caption font-semibold text-blue-tint">
+        {reach ? `Llega a ${formatCount(reach.withPush)} ${reach.withPush === 1 ? "socio" : "socios"} con notificaciones activas` : "Calculando a cuántos socios llega…"}
+        {" · al tocarla abre el evento"}
+      </p>
+    </div>
+  );
+}
+
 // ── Vista previa: how Social › Eventos shows it in the app (Paper "Social / 06" and "Social / 07") ──
 
 type Draft = {
   title: string;
   type: string | null;
-  image?: string;
   description: string;
   start?: string;
   from: string;
@@ -381,6 +540,7 @@ type Draft = {
   courts: Court[];
   capacity: number;
   registered: number;
+  audience: string;
 };
 
 function spotsLabel(registered: number, capacity: number) {
@@ -397,15 +557,11 @@ function EventPreview({ draft, context }: { draft: Draft; context: Context }) {
   const price = draft.price ? `${formatMoney(draft.price)} por persona` : "Gratis";
   const place = courtsLabel(draft.courts) ?? "Sin canchas elegidas";
 
-  const cover = (className: string) =>
-    draft.image ? (
-      // eslint-disable-next-line @next/next/no-img-element -- local preview of an uploaded file
-      <img src={draft.image} alt="" className={cn("object-cover", className)} />
-    ) : (
-      <span className={cn("flex items-center justify-center bg-elite-blue text-white/70", className)}>
-        <Icon name="layout-grid" size={24} strokeWidth={1.6} />
-      </span>
-    );
+  const cover = (className: string) => (
+    <span className={cn("flex items-center justify-center bg-elite-blue text-white/70", className)}>
+      <Icon name="layout-grid" size={24} strokeWidth={1.6} />
+    </span>
+  );
 
   return (
     <div className="flex gap-6 rounded-lg bg-surface-muted p-5">
@@ -420,7 +576,7 @@ function EventPreview({ draft, context }: { draft: Draft; context: Context }) {
           </div>
         </div>
         <p className="text-body-sm font-medium text-ink-muted">
-          Así aparece en Social › Eventos. Al tocarlo, el socio ve el detalle y se anota desde ahí.
+          Así aparece en Social › Eventos, con la foto del club. Al tocarlo, el socio ve el detalle y se anota desde ahí si es de «{draft.audience}»; el resto lo ve sin poder anotarse.
         </p>
       </div>
 
@@ -436,6 +592,7 @@ function EventPreview({ draft, context }: { draft: Draft; context: Context }) {
             )}
           </div>
           <h3 className="font-display text-title-2 text-ink">{title}</h3>
+          <span className="self-start rounded-full bg-blue-tint px-2.5 py-1 text-caption font-bold text-elite-blue">Para {draft.audience}</span>
           <div className="flex flex-col gap-2.5">
             <PreviewRow icon="calendar" title={draft.start ? longDate(draft.start) : "Sin fecha"} detail={draft.from && draft.to ? `${draft.from} a ${draft.to}` : "Sin horario"} />
             <PreviewRow icon="map-pin" title={place} detail={context.club.address} />
@@ -517,6 +674,10 @@ function EventDetail({ event, context, onClose, onEdit }: { event: ClubEvent; co
           <Badge tone={status.tone}>{status.label}</Badge>
         </div>
         <h2 className="font-display text-headline text-ink">{event.title}</h2>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge tone="info">Para {audienceLabel(event.audience)}</Badge>
+          <span className="text-caption font-semibold text-ink-muted">{notificationStatus(event)}</span>
+        </div>
         <p className="text-label font-semibold text-ink-muted">
           {[
             event.start ? `${shortDate(event.start)} · ${time(event.start)}${event.end ? ` a ${time(event.end)}` : ""}` : "Sin fecha",
@@ -604,23 +765,11 @@ function EventDetail({ event, context, onClose, onEdit }: { event: ClubEvent; co
 
       {active && (
         <footer className="flex flex-col gap-1 border-t border-line px-7 py-4">
-          <div className="flex gap-2.5">
-            <Button size="lg" className="h-12 flex-1 text-body" onClick={() => onEdit(event)}>
-              Editar evento
-            </Button>
-            <Button
-              size="lg"
-              variant="secondary"
-              icon="bell"
-              className="h-12 flex-1 text-body"
-              disabled={pending}
-              onClick={() => run(() => notifyAttendees(event.id), (data) => `Avisamos a ${(data as { count: number }).count} anotados`)}
-            >
-              Avisar a anotados
-            </Button>
-          </div>
+          <Button size="lg" className="h-12 text-body" onClick={() => onEdit(event)}>
+            Editar evento
+          </Button>
           <button type="button" onClick={() => setCancelling(true)} className="h-10 text-label font-bold text-danger hover:underline">
-            Cancelar evento y devolver pagos
+            Cancelar evento
           </button>
         </footer>
       )}
@@ -632,7 +781,7 @@ function EventDetail({ event, context, onClose, onEdit }: { event: ClubEvent; co
           pending={pending}
           icon="calendar-star"
           title={`¿Cancelar «${event.title}»?`}
-          description={`Avisamos a los ${event.registered} anotados, devolvemos lo pagado por Mercado Pago y liberamos las canchas.`}
+          description={`Deja de verse en la app${event.notification && !event.notification.sentAt ? " y no sale el aviso programado" : ""}. ${event.registered ? `Avisales a los ${event.registered} anotados: la app no les manda nada.` : ""}`.trim()}
           confirmLabel="Cancelar evento"
           onConfirm={() =>
             run(
@@ -640,7 +789,7 @@ function EventDetail({ event, context, onClose, onEdit }: { event: ClubEvent; co
               () => {
                 setCancelling(false);
                 onClose();
-                return "Evento cancelado · avisamos a los anotados";
+                return "Evento cancelado";
               },
             )
           }

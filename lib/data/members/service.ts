@@ -2,6 +2,7 @@ import "server-only";
 
 import { sql } from "@/lib/db/sql";
 
+import { sexFromDb } from "../events/audience";
 import { categoryOf, iso, personName, pesos } from "../rows";
 import type { Member } from "../types";
 
@@ -17,6 +18,7 @@ type MemberRow = {
   category: number | null;
   category_verified: boolean;
   side: "drive" | "reves" | "ambos" | null;
+  sex: "female" | "male" | null;
   status: "active" | "suspended";
   onboarding_completed_at: Date | null;
   last_seen_at: Date | null;
@@ -50,6 +52,7 @@ function toMember(row: MemberRow): Member {
     category: categoryOf(row.category),
     categoryChosenBy: row.category ? (row.category_verified ? "club" : "socio") : undefined,
     side: row.side === "ambos" ? "indistinto" : (row.side ?? undefined),
+    sex: sexFromDb(row.sex),
     status,
     memberSince: iso(row.created_at),
     lastActivity: row.last_seen_at ? iso(row.last_seen_at) : undefined,
@@ -67,7 +70,7 @@ async function queryMembers(where: (db: ReturnType<typeof sql>) => ReturnType<Re
   const db = sql();
   const rows = await db<MemberRow[]>`
     select u.id, u.first_name, u.last_name, u.display_name, u.email, u.phone, u.category,
-           u.category_verified, u.side, u.status, u.onboarding_completed_at, u.last_seen_at, u.created_at,
+           u.category_verified, u.side, u.sex, u.status, u.onboarding_completed_at, u.last_seen_at, u.created_at,
            (select count(*)::int from app.match_participants mp where mp.user_id = u.id) as matches_played,
            (select count(*)::int from app.court_occupancy o
              where o.user_id = u.id and o.kind = 'booking' and o.status in ('confirmed', 'completed')) as bookings_count,

@@ -33,7 +33,7 @@ async function EventosContent() {
     email: m.email,
     blocked: m.status === "bloqueado",
   }));
-  const context = { courts, members: memberOptions, today: dayKey(now()), pushAudience: members.filter((member) => member.notificationsOn).length, club: { address: club.address } };
+  const context = { courts, members: memberOptions, today: dayKey(now()), club: { address: club.address } };
 
   return (
     <EventsView events={events} context={context}>

@@ -70,6 +70,9 @@ export type BookingRules = {
 
 export type MemberStatus = "activo" | "nuevo" | "preinscripto" | "sin-categoria" | "bloqueado";
 
+/** in-api: female / male. */
+export type Sex = "femenino" | "masculino";
+
 export type Member = {
   id: Id;
   name: string;
@@ -79,6 +82,7 @@ export type Member = {
   category?: Category;
   categoryChosenBy?: "socio" | "club";
   side?: PlayingSide;
+  sex?: Sex;
   status: MemberStatus;
   memberSince: string;
   lastActivity?: string;
@@ -193,6 +197,20 @@ export type EventAttendee = {
   paid: "mercado-pago" | "en-club";
 };
 
+/** Who can sign up (and gets the notification). Everyone sees the event in the app. */
+export type EventAudience = {
+  categories: Category[] | null; // null = all
+  sex: Sex | null; // null = everyone
+};
+
+export type EventNotification = {
+  title: string;
+  body: string;
+  /** When it goes out; null = when the event is published. */
+  at: string | null;
+  sentAt: string | null;
+};
+
 export type ClubEvent = {
   id: Id;
   title: string;
@@ -200,6 +218,8 @@ export type ClubEvent = {
   start?: string;
   end?: string;
   courtIds: Id[];
+  audience: EventAudience;
+  notification: EventNotification | null;
   pricePerPerson: number;
   capacity: number;
   attendees: EventAttendee[];
