@@ -21,7 +21,7 @@ import { cn } from "@/lib/cn";
 import { cancelEvent, previewAudience, registerAttendee, saveEvent } from "@/lib/data/events/actions";
 import { audienceLabel, sexLabels } from "@/lib/data/events/audience";
 import { categories, type ClubEvent, type Court, type EventAudience } from "@/lib/data/types";
-import { dayKey, hoursAgo, longDate, shortDate, time, toIso } from "@/lib/dates";
+import { addDays, dayKey, hoursAgo, longDate, shortDate, time, toIso } from "@/lib/dates";
 import { formatCount, formatMoney } from "@/lib/format";
 
 type Context = {
@@ -226,7 +226,8 @@ function EventFormModal({ event, context, onClose }: { event?: ClubEvent; contex
   const [when, setWhen] = useState<"publicar" | "programar">(
     event?.notification?.at && !sent && new Date(event.notification.at) > new Date() ? "programar" : "publicar",
   );
-  const [scheduleDay, setScheduleDay] = useState(event?.notification?.at ? dayKey(event.notification.at) : context.today);
+  // By default, tomorrow at 9 (today at 9 has usually passed already).
+  const [scheduleDay, setScheduleDay] = useState(event?.notification?.at ? dayKey(event.notification.at) : addDays(context.today, 1));
   const [scheduleTime, setScheduleTime] = useState(event?.notification?.at ? time(event.notification.at) : "09:00");
   const [previewing, setPreviewing] = useState(false);
   const dirty = title !== (event?.title ?? "") || description !== (event?.description ?? "");
@@ -235,9 +236,19 @@ function EventFormModal({ event, context, onClose }: { event?: ClubEvent; contex
   const shownTitle = (notifyTitle ?? title).slice(0, 60);
   const shownBody = (notifyBody ?? firstSentence(description)).slice(0, 140);
   const reach = useAudienceSize(audience);
+  // Checked as you type, next to each field (the server checks the same).
+  const [tried, setTried] = useState(false);
+  const scheduleIssue = notify && !sent && when === "programar" ? scheduleError(scheduleDay, scheduleTime, day && to ? toIso(day, to) : null) : null;
+  const whenIssue = timeError(day, from, to, published || tried);
 
   const submit = (publish: boolean) => {
     setError(null);
+    setTried(true);
+    const issue = timeError(day, from, to, true) ?? scheduleIssue;
+    if (issue) {
+      toast(issue, "error");
+      return;
+    }
     startTransition(async () => {
       const result = await saveEvent({
         id: event?.id,
@@ -254,7 +265,10 @@ function EventFormModal({ event, context, onClose }: { event?: ClubEvent; contex
         notification: notify && !sent ? { title: shownTitle, body: shownBody, schedule: when === "programar" ? { day: scheduleDay, time: scheduleTime } : null } : null,
         publish,
       });
-      if (!result.ok) return setError(result.error);
+      if (!result.ok) {
+        toast(result.error, "error");
+        return setError(result.error);
+      }
       const sentAt = result.data.notification;
       toast(
         !publish
@@ -332,8 +346,8 @@ function EventFormModal({ event, context, onClose }: { event?: ClubEvent; contex
           </div>
         </div>
         <div className="flex gap-3">
-          <TextField label="Fecha" type="date" min={context.today} value={day} onChange={(e) => setDay(e.target.value)} className="flex-1" />
-          <Field label="Horario" className="flex-1">
+          <TextField label="Fecha" type="date" min={context.today} value={day} onChange={(e) => setDay(e.target.value)} className="flex-1" invalid={Boolean(whenIssue) && !day} />
+          <Field label="Horario" className="flex-1" error={whenIssue ?? undefined}>
             <div className="flex items-center gap-2">
               <TextInput aria-label="Hora de inicio" type="time" value={from} onChange={(e) => setFrom(e.target.value)} className="flex-1" />
               <span className="text-ink-muted">–</span>
@@ -396,7 +410,7 @@ function EventFormModal({ event, context, onClose }: { event?: ClubEvent; contex
                 <Field label="Mensaje" aside={`${shownBody.length} / 140`}>
                   <TextArea maxLength={140} rows={3} placeholder="Ej: Anotate desde la app, quedan pocos lugares." value={shownBody} onChange={(e) => setNotifyBody(e.target.value)} />
                 </Field>
-                <Field label="Cuándo sale">
+                <Field label="Cuándo sale" error={scheduleIssue ?? undefined}>
                   <Segmented
                     variant="field"
                     label="Cuándo sale"
@@ -426,6 +440,22 @@ function EventFormModal({ event, context, onClose }: { event?: ClubEvent; contex
       {error && <Callout tone="danger">{error}</Callout>}
     </Modal>
   );
+}
+
+/** The event's date and times: missing (only once the user tried to save), reversed or already past. */
+function timeError(day: string, from: string, to: string, requireAll: boolean): string | null {
+  if (!day || !from || !to) return requireAll ? "Elegí la fecha y las horas de inicio y fin." : null;
+  if (to <= from) return "La hora de fin tiene que ser después de la de inicio.";
+  if (new Date(toIso(day, to)) <= new Date()) return "Ese horario ya pasó.";
+  return null;
+}
+
+function scheduleError(day: string, at: string, eventEnd: string | null): string | null {
+  if (!day || !at) return "Elegí el día y la hora del aviso.";
+  const when = new Date(toIso(day, at));
+  if (when <= new Date()) return "Esa hora ya pasó: elegí una más tarde.";
+  if (eventEnd && when >= new Date(eventEnd)) return "El aviso tiene que salir antes de que termine el evento.";
+  return null;
 }
 
 type Reach = { members: number; withPush: number } | null;
