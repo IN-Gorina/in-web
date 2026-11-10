@@ -1,3 +1,9 @@
 ignoredBuiltDependencies:
   - sharp
   - unrs-resolver
+
+# firebase-admin 14 pulls jwks-rsa 4, which require()s the ESM-only jose 6. That only works on
+# Node >= 22.12, and Vercel's function crashed with ERR_REQUIRE_ESM loading firebase-admin/auth.
+# jwks-rsa 3.2.2 has the same API firebase-admin uses (jwks({ jwksUri, cache: false })) on CJS jose 4.
+overrides:
+  firebase-admin>jwks-rsa: 3.2.2
