@@ -12,6 +12,9 @@ const messages = {
   userDisabled: "Tu cuenta está suspendida. Escribile al club para revisarla.",
   tooManyRequests: "Hubo muchos intentos seguidos. Esperá unos minutos y probá de nuevo.",
   network: "No pudimos conectarnos. Revisá tu conexión y probá de nuevo.",
+  popupBlocked: "El navegador bloqueó la ventana de Google. Permití las ventanas emergentes para este sitio y probá de nuevo.",
+  unauthorizedDomain: "Este dominio no está autorizado para ingresar con Google. Avisale a un administrador.",
+  providerDisabled: "Este método de ingreso no está habilitado. Avisale a un administrador.",
   unknown: "Algo salió mal. Probá de nuevo en un rato.",
 };
 
@@ -26,6 +29,9 @@ const byCode: Record<string, string> = {
   "auth/user-disabled": messages.userDisabled,
   "auth/too-many-requests": messages.tooManyRequests,
   "auth/network-request-failed": messages.network,
+  "auth/popup-blocked": messages.popupBlocked,
+  "auth/unauthorized-domain": messages.unauthorizedDomain,
+  "auth/operation-not-allowed": messages.providerDisabled,
 };
 
 export function errorCode(error: unknown): string | undefined {
@@ -40,7 +46,10 @@ export function isCancelled(error: unknown): boolean {
 
 export function authMessage(error: unknown): string {
   if (error instanceof SessionError) return error.message;
-  return byCode[errorCode(error) ?? ""] ?? messages.unknown;
+  const message = byCode[errorCode(error) ?? ""];
+  // The generic message hides the cause; keep it in the console so it can be diagnosed.
+  if (!message) console.error("[auth] unexpected sign-in error", error);
+  return message ?? messages.unknown;
 }
 
 /** The session route refused the sign-in; its message is already in Spanish. */

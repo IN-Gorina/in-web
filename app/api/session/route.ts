@@ -43,7 +43,8 @@ export async function POST(request: Request) {
     const staff = roleOf(decoded) !== null;
     if (staff) await markSignedIn(decoded.uid);
     return Response.json({ staff });
-  } catch {
+  } catch (cause) {
+    console.error("[api/session] could not open the session", cause);
     return error("No pudimos iniciar la sesión. Probá de nuevo.", 401);
   }
 }

@@ -17,7 +17,8 @@ export async function POST(request: Request) {
     const email = await acceptInvite(token, password);
     if (!email) return Response.json({ error: "La invitación venció o ya se usó. Pedile a un administrador una nueva." }, { status: 410 });
     return Response.json({ email });
-  } catch {
+  } catch (cause) {
+    console.error("[api/invitacion] could not accept the invitation", cause);
     return Response.json({ error: "Algo salió mal. Probá de nuevo en un rato." }, { status: 500 });
   }
 }
